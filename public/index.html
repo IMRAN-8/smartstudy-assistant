@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SmartStudy Assistant</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg: #0f172a; --card: #1e293b; --line: #334155;
+      --text: #e2e8f0; --muted: #94a3b8; --brand: #38bdf8; --brand2: #0ea5e9;
+      --good: #22c55e; --bad: #ef4444; --warn: #f59e0b;
+    }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      background: var(--bg); color: var(--text); line-height: 1.55; }
+    header { display: flex; align-items: center; justify-content: space-between;
+      padding: 16px 24px; border-bottom: 1px solid var(--line); position: sticky; top: 0;
+      background: rgba(15,23,42,.9); backdrop-filter: blur(6px); z-index: 10; }
+    header h1 { font-size: 20px; }
+    header h1 span { color: var(--brand); }
+    nav button { background: none; border: none; color: var(--muted); cursor: pointer;
+      font-size: 15px; margin-left: 18px; }
+    nav button:hover { color: var(--text); }
+    main { max-width: 860px; margin: 0 auto; padding: 28px 20px 80px; }
+    .card { background: var(--card); border: 1px solid var(--line); border-radius: 16px;
+      padding: 22px; margin-bottom: 18px; }
+    h2 { font-size: 26px; margin-bottom: 8px; }
+    h3 { font-size: 18px; color: var(--brand); margin-bottom: 6px; }
+    p { color: var(--text); }
+    .muted { color: var(--muted); }
+    input, textarea, button.btn { width: 100%; font-size: 15px; }
+    input, textarea { background: #0b1220; border: 1px solid var(--line); color: var(--text);
+      border-radius: 10px; padding: 12px 14px; margin-top: 8px; }
+    textarea { min-height: 96px; resize: vertical; }
+    .btn { background: linear-gradient(90deg, var(--brand), var(--brand2)); color: #04202e;
+      font-weight: 700; border: none; border-radius: 10px; padding: 13px; cursor: pointer;
+      margin-top: 14px; }
+    .btn:disabled { opacity: .6; cursor: not-allowed; }
+    .btn.secondary { background: none; border: 1px solid var(--line); color: var(--text); }
+    .row { display: flex; gap: 10px; flex-wrap: wrap; }
+    .row .btn { width: auto; flex: 1; margin-top: 0; }
+    .grid { display: grid; gap: 14px; }
+    @media (min-width: 640px) { .grid.two { grid-template-columns: 1fr 1fr; } }
+    .option { display: block; border: 1px solid var(--line); border-radius: 10px;
+      padding: 12px 14px; margin-top: 8px; cursor: pointer; }
+    .option:hover { border-color: var(--brand); }
+    .pill { display: inline-block; font-size: 12px; padding: 3px 10px; border-radius: 999px;
+      background: #0b1220; border: 1px solid var(--line); color: var(--muted); }
+    .sev-high { color: var(--bad); border-color: var(--bad); }
+    .sev-medium { color: var(--warn); border-color: var(--warn); }
+    .sev-low { color: var(--good); border-color: var(--good); }
+    .score { font-size: 48px; font-weight: 800; color: var(--brand); }
+    .correct { border-left: 4px solid var(--good); }
+    .wrong { border-left: 4px solid var(--bad); }
+    .divider { border: none; border-top: 1px solid var(--line); margin: 14px 0; }
+    .hidden { display: none; }
+    .center { text-align: center; }
+    ul { padding-left: 20px; }
+    .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+      background: var(--card); border: 1px solid var(--line); padding: 12px 18px;
+      border-radius: 10px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Smart<span>Study</span> Assistant</h1>
+    <nav>
+      <button onclick="go('home')">Home</button>
+      <button onclick="loadRecall()">Recall Due</button>
+    </nav>
+  </header>
+
+  <main>
+    <!-- HOME -->
+    <section id="home">
+      <div class="card">
+        <h2>Learn anything, then prove you know it.</h2>
+        <p class="muted">Enter a topic or upload a PDF. You'll get an explanation, an exam,
+          a diagnosis of your weak areas, targeted re-teaching, and spaced-recall reviews.</p>
+      </div>
+      <div class="card">
+        <h3>Study a topic</h3>
+        <input id="topicInput" placeholder="e.g. Photosynthesis, Newton's Laws, TCP handshake" />
+        <button class="btn" onclick="startTopic()">Generate Lesson</button>
+      </div>
+      <div class="card">
+        <h3>Or upload a PDF</h3>
+        <input type="file" id="pdfInput" accept="application/pdf" />
+        <button class="btn secondary" onclick="startPdf()">Study from PDF</button>
+      </div>
+    </section>
+
+    <!-- LEARN -->
+    <section id="learn" class="hidden"></section>
+
+    <!-- EXAM -->
+    <section id="exam" class="hidden"></section>
+
+    <!-- RESULTS -->
+    <section id="results" class="hidden"></section>
+
+    <!-- RETEACH -->
+    <section id="reteach" class="hidden"></section>
+
+    <!-- RECALL -->
+    <section id="recall" class="hidden"></section>
+  </main>
+
+  <script>
+    // -------------------------------------------------------------------
+    // Tiny API helper + state
+    // -------------------------------------------------------------------
+    const API = ""; // same origin
+    let state = { sessionId: null, assessmentId: null };
+
+    async function apiPost(path, body) {
+      const r = await fetch(API + path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.error || "Request failed");
+      return data;
+    }
+    async function apiGet(path) {
+      const r = await fetch(API + path);
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.error || "Request failed");
+      return data;
+    }
+    function esc(s) { return String(s ?? "").replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])); }
+    function go(id) {
+      ["home", "learn", "exam", "results", "reteach", "recall"].forEach(s =>
+        document.getElementById(s).classList.toggle("hidden", s !== id));
+      window.scrollTo(0, 0);
+    }
+    function toast(msg) {
+      const t = document.createElement("div");
+      t.className = "toast"; t.textContent = msg; document.body.appendChild(t);
+      setTimeout(() => t.remove(), 2500);
+    }
+    function loading(sectionId, text) {
+      const el = document.getElementById(sectionId);
+      el.innerHTML = `<div class="card center"><p class="muted">${esc(text)}</p></div>`;
+      go(sectionId);
+    }
+
+    // -------------------------------------------------------------------
+    // Start a session
+    // -------------------------------------------------------------------
+    async function startTopic() {
+      const topic = document.getElementById("topicInput").value.trim();
+      if (!topic) return toast("Enter a topic first");
+      try {
+        const d = await apiPost("/api/session/topic", { topic });
+        state.sessionId = d.sessionId;
+        loadLesson();
+      } catch (e) { toast(e.message); }
+    }
+    async function startPdf() {
+      const file = document.getElementById("pdfInput").files[0];
+      if (!file) return toast("Choose a PDF first");
+      loading("learn", "Reading your PDF...");
+      try {
+        const fd = new FormData();
+        fd.append("pdf", file);
+        const r = await fetch(API + "/api/session/pdf", { method: "POST", body: fd });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error || "Upload failed");
+        state.sessionId = d.sessionId;
+        loadLesson();
+      } catch (e) { toast(e.message); go("home"); }
+    }
+
+    // -------------------------------------------------------------------
+    // Lesson
+    // -------------------------------------------------------------------
+    async function loadLesson() {
+      loading("learn", "Generating your explanation...");
+      try {
+        const d = await apiPost("/api/explanation", { sessionId: state.sessionId });
+        const e = d.explanation;
+        document.getElementById("learn").innerHTML = `
+          <div class="card">
+            <h2>${esc(e.title)}</h2>
+            <p>${esc(e.overview)}</p>
+          </div>
+          <div class="grid two">
+            ${(e.keyConcepts || []).map(c => `
+              <div class="card"><h3>${esc(c.name)}</h3><p>${esc(c.explanation)}</p></div>`).join("")}
+          </div>
+          ${(e.examples || []).length ? `<div class="card"><h3>Examples</h3><ul>${e.examples.map(x => `<li>${esc(x)}</li>`).join("")}</ul></div>` : ""}
+          ${(e.commonMistakes || []).length ? `<div class="card"><h3>Common Mistakes</h3><ul>${e.commonMistakes.map(x => `<li>${esc(x)}</li>`).join("")}</ul></div>` : ""}
+          <div class="card"><h3>Summary</h3><p>${esc(e.summary)}</p>
+            <button class="btn" onclick="loadExam()">Take the Exam</button></div>`;
+        go("learn");
+      } catch (e) { toast(e.message); go("home"); }
+    }
+
+    // -------------------------------------------------------------------
+    // Exam
+    // -------------------------------------------------------------------
+    async function loadExam() {
+      loading("exam", "Generating your exam...");
+      try {
+        const d = await apiPost("/api/assessment", { sessionId: state.sessionId });
+        state.assessmentId = d.assessmentId;
+        const qs = d.questions || [];
+        document.getElementById("exam").innerHTML = `
+          <div class="card"><h2>Exam</h2><p class="muted">${qs.length} questions. Answer all, then submit.</p></div>
+          ${qs.map((q, i) => `
+            <div class="card">
+              <p><strong>${i + 1}.</strong> ${esc(q.question_text)}</p>
+              ${q.question_type === "mcq"
+                ? (q.options || []).map(o => `
+                    <label class="option">
+                      <input type="radio" name="${q.id}" value="${esc(o)}" /> ${esc(o)}
+                    </label>`).join("")
+                : `<textarea data-q="${q.id}" placeholder="Type your answer..."></textarea>`}
+            </div>`).join("")}
+          <button class="btn" onclick="submitExam()">Submit Answers</button>`;
+        go("exam");
+      } catch (e) { toast(e.message); go("home"); }
+    }
+
+    async function submitExam() {
+      const answers = [];
+      document.querySelectorAll("#exam .card").forEach(card => {
+        const radio = card.querySelector("input[type=radio]:checked");
+        const ta = card.querySelector("textarea");
+        if (radio) answers.push({ questionId: radio.name, answer: radio.value });
+        else if (ta) answers.push({ questionId: ta.dataset.q, answer: ta.value });
+      });
+      loading("results", "Grading your answers...");
+      try {
+        const d = await apiPost("/api/submit", { assessmentId: state.assessmentId, answers });
+        showResults(d);
+      } catch (e) { toast(e.message); go("exam"); }
+    }
+
+    // -------------------------------------------------------------------
+    // Results
+    // -------------------------------------------------------------------
+    function showResults(d) {
+      const weak = d.weakConcepts || [];
+      document.getElementById("results").innerHTML = `
+        <div class="card center">
+          <p class="muted">Your score</p>
+          <div class="score">${d.score}%</div>
+        </div>
+        ${d.graded.map((g, i) => `
+          <div class="card ${g.isCorrect ? "correct" : "wrong"}">
+            <p><strong>${i + 1}.</strong> ${esc(g.question)}</p>
+            <p class="muted" style="margin-top:6px">Your answer: ${esc(g.studentAnswer) || "<em>blank</em>"}</p>
+            <p style="margin-top:4px">${g.isCorrect ? "✅ Correct" : "❌ " + esc(g.feedback)}</p>
+          </div>`).join("")}
+        <div class="card">
+          <h3>Weak concepts detected</h3>
+          ${weak.length
+            ? weak.map(w => `<p style="margin-top:6px"><span class="pill sev-${w.severity}">${w.severity}</span>
+                <strong> ${esc(w.conceptTag)}</strong></p>`).join("")
+            : `<p class="muted">None — great job! 🎉</p>`}
+          ${weak.length ? `<button class="btn" onclick="loadReteach()">Re-teach my weak areas</button>` : ""}
+          <button class="btn secondary" onclick="go('home')">Study something new</button>
+        </div>`;
+      go("results");
+    }
+
+    // -------------------------------------------------------------------
+    // Re-teach
+    // -------------------------------------------------------------------
+    async function loadReteach() {
+      loading("reteach", "Building targeted lessons for your weak areas...");
+      try {
+        const d = await apiPost("/api/reteach", { sessionId: state.sessionId });
+        document.getElementById("reteach").innerHTML = `
+          <div class="card"><h2>Targeted Re-teaching</h2>
+            <p class="muted">These concepts are now scheduled for spaced recall.</p></div>
+          ${(d.lessons || []).map(l => `
+            <div class="card">
+              <h3>${esc(l.concept)}</h3>
+              <p><strong>Simple explanation:</strong> ${esc(l.simpleExplanation)}</p>
+              <hr class="divider" />
+              <p><strong>Why it's confusing:</strong> ${esc(l.whyConfusing)}</p>
+              <p><strong>Correct understanding:</strong> ${esc(l.correctUnderstanding)}</p>
+              <p><strong>Example:</strong> ${esc(l.example)}</p>
+            </div>`).join("")}
+          <button class="btn" onclick="loadRecall()">Go to Recall</button>
+          <button class="btn secondary" onclick="go('home')">Study something new</button>`;
+        go("reteach");
+      } catch (e) { toast(e.message); }
+    }
+
+    // -------------------------------------------------------------------
+    // Spaced recall (SM-2)
+    // -------------------------------------------------------------------
+    async function loadRecall() {
+      loading("recall", "Loading your due reviews...");
+      try {
+        const d = await apiGet("/api/recall/due");
+        const items = d.due || [];
+        document.getElementById("recall").innerHTML = `
+          <div class="card"><h2>Spaced Recall</h2>
+            <p class="muted">${items.length ? "Review these before you forget them." : "Nothing due right now. Check back later!"}</p></div>
+          ${items.map(it => {
+            const r = it.reteach || {};
+            return `
+            <div class="card">
+              <span class="pill sev-${it.severity}">${it.severity}</span>
+              <h3 style="margin-top:8px">${esc(it.concept_tag)}</h3>
+              ${r.miniQuestion ? `<p style="margin-top:8px"><strong>Q:</strong> ${esc(r.miniQuestion)}</p>
+                <button class="btn secondary" onclick="this.nextElementSibling.classList.toggle('hidden')">Show answer</button>
+                <p class="hidden" style="margin-top:8px"><strong>A:</strong> ${esc(r.miniAnswer)}</p>` : `<p class="muted">${esc(it.diagnosis)}</p>`}
+              <p class="muted" style="margin-top:12px">How well did you recall it?</p>
+              <div class="row">
+                <button class="btn secondary" onclick="review('${it.id}',2)">Again</button>
+                <button class="btn secondary" onclick="review('${it.id}',3)">Hard</button>
+                <button class="btn secondary" onclick="review('${it.id}',4)">Good</button>
+                <button class="btn secondary" onclick="review('${it.id}',5)">Easy</button>
+              </div>
+            </div>`; }).join("")}
+          <button class="btn secondary" onclick="go('home')">Back home</button>`;
+        go("recall");
+      } catch (e) { toast(e.message); }
+    }
+
+    async function review(id, quality) {
+      try {
+        const d = await apiPost(`/api/recall/${id}/review`, { quality });
+        const next = new Date(d.recall.due_at).toLocaleDateString();
+        toast(`Rescheduled — next review on ${next}`);
+        loadRecall();
+      } catch (e) { toast(e.message); }
+    }
+  </script>
+</body>
+</html>
