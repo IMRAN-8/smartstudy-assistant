@@ -10,8 +10,6 @@ An AI-powered adaptive learning and self-assessment platform. Enter a topic or u
 
 It is a single Node.js + Express app that serves both the web page and the API — deploy it exactly like a normal web service (e.g. Render).
 
-## Live Website: https://smartstudy-assistant.onrender.com/
-
 ## Tech Stack
 
 - Node.js + Express (one `server.js`)
