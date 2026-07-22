@@ -1,0 +1,2300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0"
+  />
+
+  <meta
+    name="description"
+    content="SmartStudy Assistant - AI powered adaptive learning platform"
+  />
+
+  <title>SmartStudy Assistant</title>
+
+  <style>
+    /* =========================
+       BASIC RESET
+    ========================== */
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    :root {
+      --background: #06111f;
+      --background-secondary: #0a1728;
+
+      --card: rgba(15, 31, 52, 0.9);
+      --card-secondary: #10243b;
+
+      --text: #f1f7ff;
+      --muted: #a5b4c8;
+
+      --border: rgba(148, 163, 184, 0.16);
+      --border-active: rgba(71, 221, 218, 0.4);
+
+      --primary: #53e0d4;
+      --primary-secondary: #38bdf8;
+      --primary-dark: #062b30;
+
+      --success: #34d399;
+      --danger: #fb7185;
+
+      --shadow: 0 25px 70px rgba(0, 0, 0, 0.3);
+    }
+
+    body.light {
+      --background: #f3f7fb;
+      --background-secondary: #e9f1f8;
+
+      --card: rgba(255, 255, 255, 0.9);
+      --card-secondary: #f5f8fc;
+
+      --text: #102033;
+      --muted: #63758b;
+
+      --border: rgba(15, 23, 42, 0.1);
+      --border-active: rgba(8, 145, 178, 0.35);
+
+      --primary: #13b8aa;
+      --primary-secondary: #0284c7;
+      --primary-dark: #ecfeff;
+
+      --shadow: 0 25px 70px rgba(15, 23, 42, 0.12);
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      min-height: 100vh;
+
+      color: var(--text);
+
+      background:
+        radial-gradient(
+          circle at 15% 15%,
+          rgba(56, 189, 248, 0.12),
+          transparent 30rem
+        ),
+        radial-gradient(
+          circle at 85% 20%,
+          rgba(99, 102, 241, 0.12),
+          transparent 30rem
+        ),
+        var(--background);
+
+      font-family:
+        Inter,
+        system-ui,
+        -apple-system,
+        BlinkMacSystemFont,
+        "Segoe UI",
+        sans-serif;
+
+      transition:
+        background 0.3s ease,
+        color 0.3s ease;
+    }
+
+    button,
+    input {
+      font: inherit;
+    }
+
+    button {
+      color: inherit;
+    }
+
+    /* =========================
+       BACKGROUND GRID
+    ========================== */
+
+    .background-grid {
+      position: fixed;
+      inset: 0;
+
+      z-index: -2;
+      pointer-events: none;
+
+      opacity: 0.32;
+
+      background-image:
+        linear-gradient(var(--border) 1px, transparent 1px),
+        linear-gradient(90deg, var(--border) 1px, transparent 1px);
+
+      background-size: 42px 42px;
+
+      mask-image:
+        linear-gradient(
+          to bottom,
+          black,
+          transparent 90%
+        );
+    }
+
+    /* =========================
+       HEADER
+    ========================== */
+
+    header {
+      position: sticky;
+      top: 0;
+
+      z-index: 50;
+
+      border-bottom: 1px solid var(--border);
+
+      background:
+        color-mix(
+          in srgb,
+          var(--background) 82%,
+          transparent
+        );
+
+      backdrop-filter: blur(18px);
+      -webkit-backdrop-filter: blur(18px);
+    }
+
+    .navbar {
+      width: min(1460px, calc(100% - 40px));
+      min-height: 84px;
+
+      margin-inline: auto;
+
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+
+      gap: 20px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+
+      gap: 14px;
+    }
+
+    .brand-icon {
+      width: 48px;
+      height: 48px;
+
+      display: grid;
+      place-items: center;
+
+      border-radius: 16px;
+
+      color: #062b30;
+
+      background:
+        linear-gradient(
+          135deg,
+          var(--primary),
+          var(--primary-secondary)
+        );
+
+      box-shadow:
+        0 12px 30px rgba(56, 189, 248, 0.2);
+    }
+
+    .brand-icon svg {
+      width: 26px;
+      height: 26px;
+    }
+
+    .brand-title {
+      font-size: 20px;
+      font-weight: 800;
+      letter-spacing: -0.03em;
+    }
+
+    .brand-title span {
+      color: var(--primary);
+    }
+
+    .brand-subtitle {
+      margin-top: 3px;
+
+      color: var(--muted);
+
+      font-size: 11px;
+      font-weight: 700;
+
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+    }
+
+    .nav-right {
+      display: flex;
+      align-items: center;
+
+      gap: 14px;
+    }
+
+    .assistant-status {
+      display: flex;
+      align-items: center;
+
+      gap: 8px;
+
+      color: var(--muted);
+
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .status-dot {
+      width: 9px;
+      height: 9px;
+
+      border-radius: 50%;
+
+      background: #fbbf24;
+
+      box-shadow:
+        0 0 12px #fbbf24;
+    }
+
+    .assistant-status.online .status-dot {
+      background: var(--success);
+
+      box-shadow:
+        0 0 14px var(--success);
+    }
+
+    .assistant-status.offline .status-dot {
+      background: var(--danger);
+
+      box-shadow:
+        0 0 14px var(--danger);
+    }
+
+    .nav-button,
+    .theme-button {
+      min-height: 48px;
+
+      border: 1px solid var(--border);
+      border-radius: 14px;
+
+      color: var(--muted);
+      background: var(--card);
+
+      font-weight: 750;
+
+      cursor: pointer;
+
+      transition: 0.2s ease;
+    }
+
+    .nav-button {
+      padding: 0 18px;
+    }
+
+    .theme-button {
+      width: 48px;
+
+      display: grid;
+      place-items: center;
+    }
+
+    .theme-button svg {
+      width: 21px;
+      height: 21px;
+    }
+
+    .nav-button:hover,
+    .theme-button:hover {
+      color: var(--text);
+
+      border-color: var(--border-active);
+
+      transform: translateY(-1px);
+    }
+
+    .nav-button.active {
+      color: var(--text);
+      border-color: var(--border-active);
+    }
+
+    /* =========================
+       MAIN LAYOUT
+    ========================== */
+
+    main {
+      width: min(1460px, calc(100% - 40px));
+
+      margin-inline: auto;
+      padding: 28px 0 60px;
+    }
+
+    .hero {
+      display: grid;
+
+      grid-template-columns:
+        minmax(0, 1.2fr)
+        minmax(420px, 0.8fr);
+
+      gap: 22px;
+    }
+
+    .hero-left,
+    .hero-right {
+      border: 1px solid var(--border);
+      border-radius: 32px;
+
+      background: var(--card);
+
+      box-shadow: var(--shadow);
+
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+    }
+
+    /* =========================
+       LEFT HERO
+    ========================== */
+
+    .hero-left {
+      min-height: 850px;
+
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+
+      padding: clamp(40px, 7vw, 90px);
+    }
+
+    .eyebrow {
+      width: fit-content;
+
+      display: inline-flex;
+      align-items: center;
+
+      gap: 8px;
+
+      padding: 9px 16px;
+
+      border: 1px solid var(--border-active);
+      border-radius: 999px;
+
+      color: var(--primary);
+
+      background:
+        rgba(83, 224, 212, 0.06);
+
+      font-size: 13px;
+      font-weight: 850;
+
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .hero-heading {
+      max-width: 760px;
+
+      margin-top: 35px;
+
+      font-size:
+        clamp(
+          64px,
+          7vw,
+          105px
+        );
+
+      line-height: 0.97;
+
+      letter-spacing: -0.065em;
+    }
+
+    .gradient-text {
+      color: transparent;
+
+      background:
+        linear-gradient(
+          135deg,
+          var(--primary),
+          var(--primary-secondary),
+          #818cf8
+        );
+
+      -webkit-background-clip: text;
+      background-clip: text;
+    }
+
+    .hero-description {
+      max-width: 760px;
+
+      margin-top: 28px;
+
+      color: var(--muted);
+
+      font-size: 19px;
+      line-height: 1.7;
+    }
+
+    .feature-list {
+      display: flex;
+      flex-wrap: wrap;
+
+      gap: 12px;
+
+      margin-top: 30px;
+    }
+
+    .feature {
+      display: inline-flex;
+      align-items: center;
+
+      gap: 8px;
+
+      padding: 10px 15px;
+
+      border: 1px solid var(--border);
+      border-radius: 999px;
+
+      color: var(--muted);
+
+      background:
+        color-mix(
+          in srgb,
+          var(--card-secondary) 75%,
+          transparent
+        );
+
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .feature-check {
+      color: var(--primary);
+    }
+
+    /* =========================
+       RIGHT HERO
+    ========================== */
+
+    .hero-right {
+      padding: 22px;
+    }
+
+    .study-card {
+      padding: 24px;
+
+      border: 1px solid var(--border);
+      border-radius: 25px;
+
+      background:
+        color-mix(
+          in srgb,
+          var(--card-secondary) 84%,
+          transparent
+        );
+    }
+
+    .study-card + .study-card {
+      margin-top: 20px;
+    }
+
+    .card-heading {
+      display: flex;
+      align-items: center;
+
+      gap: 12px;
+    }
+
+    .card-icon {
+      width: 42px;
+      height: 42px;
+
+      display: grid;
+      place-items: center;
+
+      border: 1px solid var(--border-active);
+      border-radius: 13px;
+
+      color: var(--primary);
+
+      background:
+        rgba(83, 224, 212, 0.07);
+    }
+
+    .card-icon svg {
+      width: 22px;
+      height: 22px;
+    }
+
+    .card-title {
+      font-size: 21px;
+      font-weight: 800;
+    }
+
+    .card-description {
+      margin-top: 15px;
+
+      color: var(--muted);
+
+      font-size: 15px;
+      line-height: 1.6;
+    }
+
+    label {
+      display: block;
+
+      margin-top: 20px;
+      margin-bottom: 8px;
+
+      font-size: 15px;
+      font-weight: 800;
+    }
+
+    .topic-input {
+      width: 100%;
+      min-height: 64px;
+
+      padding: 0 18px;
+
+      border: 1px solid var(--border);
+      border-radius: 16px;
+
+      outline: none;
+
+      color: var(--text);
+      background: var(--background-secondary);
+
+      font-size: 17px;
+
+      transition: 0.2s ease;
+    }
+
+    .topic-input::placeholder {
+      color:
+        color-mix(
+          in srgb,
+          var(--muted) 72%,
+          transparent
+        );
+    }
+
+    .topic-input:focus {
+      border-color: var(--primary-secondary);
+
+      box-shadow:
+        0 0 0 4px rgba(56, 189, 248, 0.1);
+    }
+
+    .suggestions {
+      display: flex;
+      flex-wrap: wrap;
+
+      gap: 9px;
+
+      margin-top: 14px;
+    }
+
+    .suggestion-button {
+      padding: 8px 13px;
+
+      border: 1px solid var(--border);
+      border-radius: 999px;
+
+      color: var(--muted);
+      background: transparent;
+
+      font-size: 13px;
+
+      cursor: pointer;
+
+      transition: 0.2s ease;
+    }
+
+    .suggestion-button:hover {
+      color: var(--text);
+      border-color: var(--border-active);
+    }
+
+    .primary-button,
+    .secondary-button {
+      width: 100%;
+      min-height: 60px;
+
+      margin-top: 20px;
+      padding: 0 20px;
+
+      border: 0;
+      border-radius: 16px;
+
+      font-size: 17px;
+      font-weight: 850;
+
+      cursor: pointer;
+
+      transition: 0.2s ease;
+    }
+
+    .primary-button {
+      color: #062b30;
+
+      background:
+        linear-gradient(
+          135deg,
+          var(--primary),
+          var(--primary-secondary)
+        );
+
+      box-shadow:
+        0 14px 30px rgba(56, 189, 248, 0.16);
+    }
+
+    .primary-button:hover:not(:disabled) {
+      transform: translateY(-2px);
+
+      box-shadow:
+        0 18px 36px rgba(56, 189, 248, 0.24);
+    }
+
+    .secondary-button {
+      color: var(--text);
+
+      border: 1px solid var(--border);
+
+      background: var(--card-secondary);
+    }
+
+    .secondary-button:hover:not(:disabled) {
+      border-color: var(--border-active);
+    }
+
+    button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    /* =========================
+       PDF UPLOAD
+    ========================== */
+
+    .upload-box {
+      position: relative;
+
+      min-height: 195px;
+
+      display: grid;
+      place-items: center;
+
+      margin-top: 18px;
+      padding: 25px;
+
+      border: 1px dashed var(--border-active);
+      border-radius: 19px;
+
+      text-align: center;
+
+      background:
+        rgba(56, 189, 248, 0.03);
+
+      cursor: pointer;
+
+      transition: 0.2s ease;
+    }
+
+    .upload-box:hover,
+    .upload-box.dragging {
+      border-color: var(--primary);
+
+      background:
+        rgba(83, 224, 212, 0.07);
+    }
+
+    .upload-box input {
+      position: absolute;
+      inset: 0;
+
+      width: 100%;
+      height: 100%;
+
+      opacity: 0;
+
+      cursor: pointer;
+    }
+
+    .upload-icon {
+      width: 54px;
+      height: 54px;
+
+      display: grid;
+      place-items: center;
+
+      margin-inline: auto;
+
+      border: 1px solid var(--border-active);
+      border-radius: 16px;
+
+      color: var(--primary);
+
+      background:
+        rgba(83, 224, 212, 0.07);
+    }
+
+    .upload-icon svg {
+      width: 25px;
+      height: 25px;
+    }
+
+    .upload-title {
+      margin-top: 15px;
+
+      font-size: 18px;
+      font-weight: 850;
+    }
+
+    .upload-subtitle {
+      margin-top: 5px;
+
+      color: var(--muted);
+
+      font-size: 14px;
+    }
+
+    .file-name {
+      max-width: 100%;
+
+      margin-top: 8px;
+
+      overflow: hidden;
+
+      color: var(--primary);
+
+      font-size: 14px;
+      font-weight: 750;
+
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    /* =========================
+       LOADING OVERLAY
+    ========================== */
+
+    .loading-overlay {
+      position: fixed;
+      inset: 0;
+
+      z-index: 100;
+
+      display: none;
+      place-items: center;
+
+      padding: 20px;
+
+      background:
+        rgba(2, 9, 18, 0.82);
+
+      backdrop-filter: blur(18px);
+      -webkit-backdrop-filter: blur(18px);
+    }
+
+    .loading-overlay.show {
+      display: grid;
+    }
+
+    .loading-card {
+      width: min(560px, 100%);
+
+      padding: 45px 35px;
+
+      border: 1px solid var(--border);
+      border-radius: 30px;
+
+      text-align: center;
+
+      background: var(--card);
+
+      box-shadow: var(--shadow);
+    }
+
+    .loader-visual {
+      position: relative;
+
+      width: 130px;
+      height: 130px;
+
+      margin:
+        0 auto
+        25px;
+    }
+
+    .loader-core {
+      position: absolute;
+      inset: 38px;
+
+      display: grid;
+      place-items: center;
+
+      border-radius: 22px;
+
+      color: #062b30;
+
+      background:
+        linear-gradient(
+          135deg,
+          var(--primary),
+          var(--primary-secondary)
+        );
+
+      animation:
+        pulse 1.8s ease-in-out infinite;
+    }
+
+    .loader-core svg {
+      width: 32px;
+      height: 32px;
+    }
+
+    .loader-ring {
+      position: absolute;
+      inset: 0;
+
+      border: 1px solid var(--border-active);
+      border-radius: 50%;
+
+      animation:
+        spin 3.6s linear infinite;
+    }
+
+    .loader-ring::after {
+      content: "";
+
+      position: absolute;
+      top: 5px;
+      left: 50%;
+
+      width: 11px;
+      height: 11px;
+
+      border-radius: 50%;
+
+      background: var(--primary);
+
+      box-shadow:
+        0 0 18px var(--primary);
+
+      transform: translateX(-50%);
+    }
+
+    .loader-ring.second {
+      inset: 15px;
+
+      animation:
+        spin 2.6s linear infinite reverse;
+    }
+
+    .loader-ring.second::after {
+      top: auto;
+      bottom: 4px;
+
+      background: #818cf8;
+
+      box-shadow:
+        0 0 18px #818cf8;
+    }
+
+    .loading-title {
+      font-size: 27px;
+      font-weight: 850;
+
+      letter-spacing: -0.03em;
+    }
+
+    .loading-message {
+      min-height: 26px;
+
+      margin-top: 10px;
+
+      color: var(--muted);
+    }
+
+    .progress-track {
+      height: 7px;
+
+      margin-top: 25px;
+
+      overflow: hidden;
+
+      border-radius: 999px;
+
+      background: var(--card-secondary);
+    }
+
+    .progress-bar {
+      width: 42%;
+      height: 100%;
+
+      border-radius: inherit;
+
+      background:
+        linear-gradient(
+          90deg,
+          var(--primary),
+          var(--primary-secondary),
+          #818cf8
+        );
+
+      animation:
+        loadingProgress 2s ease-in-out infinite;
+    }
+
+    /* =========================
+       LESSON RESULT
+    ========================== */
+
+    .lesson-section {
+      display: none;
+
+      margin-top: 25px;
+    }
+
+    .lesson-section.show {
+      display: block;
+    }
+
+    .lesson-header,
+    .lesson-card {
+      border: 1px solid var(--border);
+      border-radius: 25px;
+
+      background: var(--card);
+
+      box-shadow: var(--shadow);
+    }
+
+    .lesson-header {
+      padding: 35px;
+    }
+
+    .lesson-header h2 {
+      margin-top: 15px;
+
+      font-size:
+        clamp(
+          32px,
+          4vw,
+          50px
+        );
+
+      letter-spacing: -0.04em;
+    }
+
+    .lesson-header p {
+      max-width: 900px;
+
+      margin-top: 15px;
+
+      color: var(--muted);
+
+      line-height: 1.75;
+    }
+
+    .lesson-grid {
+      display: grid;
+
+      grid-template-columns:
+        repeat(2, minmax(0, 1fr));
+
+      gap: 18px;
+
+      margin-top: 18px;
+    }
+
+    .lesson-card {
+      padding: 25px;
+    }
+
+    .lesson-number {
+      width: 42px;
+      height: 42px;
+
+      display: grid;
+      place-items: center;
+
+      border: 1px solid var(--border-active);
+      border-radius: 13px;
+
+      color: var(--primary);
+
+      font-weight: 850;
+    }
+
+    .lesson-card h3 {
+      margin-top: 20px;
+
+      font-size: 20px;
+    }
+
+    .lesson-card p {
+      margin-top: 10px;
+
+      color: var(--muted);
+
+      line-height: 1.7;
+    }
+
+    .back-button {
+      width: fit-content;
+
+      margin-top: 20px;
+      padding: 13px 20px;
+
+      border: 1px solid var(--border);
+      border-radius: 14px;
+
+      color: var(--text);
+      background: var(--card);
+
+      font-weight: 750;
+
+      cursor: pointer;
+    }
+
+    /* =========================
+       TOAST
+    ========================== */
+
+    .toast {
+      position: fixed;
+      right: 20px;
+      bottom: 20px;
+
+      z-index: 120;
+
+      max-width: 380px;
+
+      display: none;
+
+      padding: 15px 18px;
+
+      border: 1px solid var(--border);
+      border-radius: 15px;
+
+      color: var(--text);
+      background: var(--card);
+
+      box-shadow: var(--shadow);
+    }
+
+    .toast.show {
+      display: block;
+
+      animation:
+        toastIn 0.25s ease;
+    }
+
+    .toast.error {
+      border-color:
+        rgba(251, 113, 133, 0.45);
+    }
+
+    .toast.success {
+      border-color:
+        rgba(52, 211, 153, 0.45);
+    }
+
+    /* =========================
+       ANIMATIONS
+    ========================== */
+
+    @keyframes spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+
+    @keyframes pulse {
+      0%,
+      100% {
+        transform: scale(0.95);
+      }
+
+      50% {
+        transform: scale(1.05);
+      }
+    }
+
+    @keyframes loadingProgress {
+      0% {
+        transform: translateX(-120%);
+      }
+
+      60% {
+        transform: translateX(130%);
+      }
+
+      100% {
+        transform: translateX(250%);
+      }
+    }
+
+    @keyframes toastIn {
+      from {
+        opacity: 0;
+        transform: translateY(10px);
+      }
+
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    /* =========================
+       RESPONSIVE
+    ========================== */
+
+    @media (max-width: 1050px) {
+      .hero {
+        grid-template-columns: 1fr;
+      }
+
+      .hero-left {
+        min-height: auto;
+      }
+    }
+
+    @media (max-width: 720px) {
+      .navbar {
+        width: min(100% - 22px, 1460px);
+      }
+
+      main {
+        width: min(100% - 22px, 1460px);
+      }
+
+      .brand-subtitle,
+      .assistant-status {
+        display: none;
+      }
+
+      .nav-button {
+        padding: 0 12px;
+
+        font-size: 13px;
+      }
+
+      .hero-left,
+      .hero-right {
+        border-radius: 24px;
+      }
+
+      .hero-left {
+        padding: 35px 25px;
+      }
+
+      .hero-heading {
+        font-size: 56px;
+      }
+
+      .hero-description {
+        font-size: 16px;
+      }
+
+      .hero-right {
+        padding: 14px;
+      }
+
+      .study-card {
+        padding: 20px;
+      }
+
+      .lesson-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 480px) {
+      .brand-title {
+        font-size: 16px;
+      }
+
+      .brand-icon {
+        width: 42px;
+        height: 42px;
+      }
+
+      .nav-button.recall-button {
+        display: none;
+      }
+
+      .hero-heading {
+        font-size: 48px;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *,
+      *::before,
+      *::after {
+        animation-duration: 0.001ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.001ms !important;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <div class="background-grid"></div>
+
+  <!-- =========================
+       HEADER
+  ========================== -->
+
+  <header>
+    <nav class="navbar">
+      <div class="brand">
+        <div class="brand-icon">
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            aria-hidden="true"
+          >
+            <path
+              d="M4 6.5 12 3l8 3.5-8 3.5-8-3.5Z"
+              stroke="currentColor"
+              stroke-width="1.9"
+              stroke-linejoin="round"
+            />
+
+            <path
+              d="M7 8.2v5.1c0 1.2 2.2 2.7 5 2.7s5-1.5 5-2.7V8.2"
+              stroke="currentColor"
+              stroke-width="1.9"
+              stroke-linecap="round"
+            />
+          </svg>
+        </div>
+
+        <div>
+          <div class="brand-title">
+            Smart<span>Study</span> Assistant
+          </div>
+
+          <div class="brand-subtitle">
+            Adaptive Learning Platform
+          </div>
+        </div>
+      </div>
+
+      <div class="nav-right">
+        <div
+          id="assistantStatus"
+          class="assistant-status"
+        >
+          <span class="status-dot"></span>
+          <span id="assistantStatusText">
+            Checking assistant
+          </span>
+        </div>
+
+        <button
+          class="nav-button active"
+          type="button"
+          onclick="showHome()"
+        >
+          Home
+        </button>
+
+        <button
+          class="nav-button recall-button"
+          type="button"
+          onclick="showRecallMessage()"
+        >
+          Recall Due
+        </button>
+
+        <button
+          id="themeButton"
+          class="theme-button"
+          type="button"
+          aria-label="Change theme"
+          title="Change theme"
+        >
+          <svg
+            id="themeIcon"
+            viewBox="0 0 24 24"
+            fill="none"
+          ></svg>
+        </button>
+      </div>
+    </nav>
+  </header>
+
+  <!-- =========================
+       MAIN
+  ========================== -->
+
+  <main>
+    <section id="homeSection">
+      <div class="hero">
+
+        <!-- LEFT -->
+
+        <div class="hero-left">
+          <div class="eyebrow">
+            <span>✦</span>
+            AI-Powered Active Learning
+          </div>
+
+          <h1 class="hero-heading">
+            Learn deeply.
+
+            <span class="gradient-text">
+              Remember longer.
+            </span>
+          </h1>
+
+          <p class="hero-description">
+            Turn any topic or PDF into a clear lesson,
+            a personalized assessment, a weak-concept
+            diagnosis, targeted re-teaching, and
+            spaced-recall reviews.
+          </p>
+
+          <div class="feature-list">
+            <span class="feature">
+              <span class="feature-check">✓</span>
+              Topic or PDF
+            </span>
+
+            <span class="feature">
+              <span class="feature-check">✓</span>
+              Smart assessment
+            </span>
+
+            <span class="feature">
+              <span class="feature-check">✓</span>
+              Weak-area diagnosis
+            </span>
+
+            <span class="feature">
+              <span class="feature-check">✓</span>
+              Spaced recall
+            </span>
+          </div>
+        </div>
+
+        <!-- RIGHT -->
+
+        <div class="hero-right">
+
+          <!-- TOPIC CARD -->
+
+          <div class="study-card">
+            <div class="card-heading">
+              <div class="card-icon">
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                >
+                  <path
+                    d="M5 4.5h10.5A2.5 2.5 0 0 1 18 7v12H7.5A2.5 2.5 0 0 1 5 16.5v-12Z"
+                    stroke="currentColor"
+                    stroke-width="1.8"
+                  />
+
+                  <path
+                    d="M7.5 19A2.5 2.5 0 0 1 5 16.5 2.5 2.5 0 0 1 7.5 14H18"
+                    stroke="currentColor"
+                    stroke-width="1.8"
+                  />
+                </svg>
+              </div>
+
+              <h2 class="card-title">
+                Study a topic
+              </h2>
+            </div>
+
+            <p class="card-description">
+              Type a subject, chapter, theory,
+              formula, or concept.
+            </p>
+
+            <label for="topicInput">
+              Topic name
+            </label>
+
+            <!-- Blue arrow button removed -->
+
+            <input
+              id="topicInput"
+              class="topic-input"
+              type="text"
+              autocomplete="off"
+              maxlength="240"
+              placeholder="e.g. Operating System Deadlock"
+            />
+
+            <div class="suggestions">
+              <button
+                class="suggestion-button"
+                type="button"
+                onclick="selectTopic('Database Normalization')"
+              >
+                Database Normalization
+              </button>
+
+              <button
+                class="suggestion-button"
+                type="button"
+                onclick="selectTopic('Fourier Series')"
+              >
+                Fourier Series
+              </button>
+
+              <button
+                class="suggestion-button"
+                type="button"
+                onclick="selectTopic('Java Inheritance')"
+              >
+                Java Inheritance
+              </button>
+            </div>
+
+            <button
+              id="generateButton"
+              class="primary-button"
+              type="button"
+              onclick="generateLesson()"
+            >
+              + &nbsp; Generate my lesson
+            </button>
+          </div>
+
+          <!-- PDF CARD -->
+
+          <div class="study-card">
+            <div class="card-heading">
+              <div class="card-icon">
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                >
+                  <path
+                    d="M7 3h7l4 4v14H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z"
+                    stroke="currentColor"
+                    stroke-width="1.8"
+                  />
+
+                  <path
+                    d="M14 3v5h5M9 13h6M9 17h4"
+                    stroke="currentColor"
+                    stroke-width="1.8"
+                    stroke-linecap="round"
+                  />
+                </svg>
+              </div>
+
+              <h2 class="card-title">
+                Study from a PDF
+              </h2>
+            </div>
+
+            <p class="card-description">
+              Upload a text-based PDF and SSA will
+              turn it into a learning session.
+            </p>
+
+            <label
+              id="uploadBox"
+              class="upload-box"
+              for="pdfInput"
+            >
+              <input
+                id="pdfInput"
+                type="file"
+                accept=".pdf,application/pdf"
+              />
+
+              <div>
+                <div class="upload-icon">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                  >
+                    <path
+                      d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5"
+                      stroke="currentColor"
+                      stroke-width="1.9"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    />
+
+                    <path
+                      d="M5 14v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4"
+                      stroke="currentColor"
+                      stroke-width="1.9"
+                      stroke-linecap="round"
+                    />
+                  </svg>
+                </div>
+
+                <div class="upload-title">
+                  Drop your PDF here
+                </div>
+
+                <div class="upload-subtitle">
+                  or click to browse
+                </div>
+
+                <div
+                  id="fileName"
+                  class="file-name"
+                >
+                  No file selected
+                </div>
+              </div>
+            </label>
+
+            <button
+              id="pdfButton"
+              class="secondary-button"
+              type="button"
+              onclick="studyPdf()"
+            >
+              Study from selected PDF
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- HOW SSA WORKS REMOVED -->
+
+    <!-- LESSON SECTION -->
+
+    <section
+      id="lessonSection"
+      class="lesson-section"
+    ></section>
+  </main>
+
+  <!-- =========================
+       LOADING
+  ========================== -->
+
+  <div
+    id="loadingOverlay"
+    class="loading-overlay"
+  >
+    <div class="loading-card">
+      <div class="loader-visual">
+        <div class="loader-ring"></div>
+        <div class="loader-ring second"></div>
+
+        <div class="loader-core">
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+          >
+            <path
+              d="M9.5 4.5A3.5 3.5 0 0 0 6 8v1a3 3 0 0 0-1 5.83V16a4 4 0 0 0 4 4h1V4.5h-.5ZM14.5 4.5A3.5 3.5 0 0 1 18 8v1a3 3 0 0 1 1 5.83V16a4 4 0 0 1-4 4h-1V4.5h.5Z"
+              stroke="currentColor"
+              stroke-width="1.75"
+            />
+          </svg>
+        </div>
+      </div>
+
+      <h2
+        id="loadingTitle"
+        class="loading-title"
+      >
+        Creating your lesson
+      </h2>
+
+      <p
+        id="loadingMessage"
+        class="loading-message"
+      >
+        Understanding your topic...
+      </p>
+
+      <div class="progress-track">
+        <div class="progress-bar"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TOAST -->
+
+  <div
+    id="toast"
+    class="toast"
+  ></div>
+
+  <script>
+    /* =========================
+       CONFIGURATION
+    ========================== */
+
+    const API_BASE_URL =
+      "http://localhost:5000";
+
+    let selectedPdf = null;
+    let loadingInterval = null;
+
+    /* =========================
+       THEME
+    ========================== */
+
+    const themeButton =
+      document.getElementById("themeButton");
+
+    const themeIcon =
+      document.getElementById("themeIcon");
+
+    function getSystemTheme() {
+      return window.matchMedia(
+        "(prefers-color-scheme: light)"
+      ).matches
+        ? "light"
+        : "dark";
+    }
+
+    function applyTheme(theme) {
+      document.body.classList.toggle(
+        "light",
+        theme === "light"
+      );
+
+      themeIcon.innerHTML =
+        theme === "light"
+          ? `
+            <circle
+              cx="12"
+              cy="12"
+              r="4"
+              stroke="currentColor"
+              stroke-width="1.8"
+            />
+
+            <path
+              d="
+                M12 2v2
+                M12 20v2
+                M4.93 4.93l1.42 1.42
+                M17.65 17.65l1.42 1.42
+                M2 12h2
+                M20 12h2
+                M4.93 19.07l1.42-1.42
+                M17.65 6.35l1.42-1.42
+              "
+              stroke="currentColor"
+              stroke-width="1.8"
+              stroke-linecap="round"
+            />
+          `
+          : `
+            <path
+              d="
+                M20.2 15.2
+                A8 8 0 0 1
+                8.8 3.8
+                A8.7 8.7 0 1 0
+                20.2 15.2Z
+              "
+              stroke="currentColor"
+              stroke-width="1.8"
+              stroke-linejoin="round"
+            />
+          `;
+    }
+
+    function initializeTheme() {
+      const savedTheme =
+        localStorage.getItem("ssa-theme");
+
+      const theme =
+        savedTheme || getSystemTheme();
+
+      applyTheme(theme);
+    }
+
+    themeButton.addEventListener(
+      "click",
+      function () {
+        const currentTheme =
+          document.body.classList.contains("light")
+            ? "light"
+            : "dark";
+
+        const nextTheme =
+          currentTheme === "dark"
+            ? "light"
+            : "dark";
+
+        localStorage.setItem(
+          "ssa-theme",
+          nextTheme
+        );
+
+        applyTheme(nextTheme);
+      }
+    );
+
+    window
+      .matchMedia("(prefers-color-scheme: light)")
+      .addEventListener("change", function () {
+        const savedTheme =
+          localStorage.getItem("ssa-theme");
+
+        if (!savedTheme) {
+          applyTheme(getSystemTheme());
+        }
+      });
+
+    /* =========================
+       BACKEND STATUS
+    ========================== */
+
+    async function checkAssistantStatus() {
+      const statusElement =
+        document.getElementById(
+          "assistantStatus"
+        );
+
+      const statusText =
+        document.getElementById(
+          "assistantStatusText"
+        );
+
+      try {
+        const response = await fetch(
+          `${API_BASE_URL}/api/health`
+        );
+
+        if (!response.ok) {
+          throw new Error(
+            "Assistant connection failed"
+          );
+        }
+
+        const data = await response.json();
+
+        statusElement.classList.remove(
+          "offline"
+        );
+
+        statusElement.classList.add(
+          "online"
+        );
+
+        statusText.textContent =
+          "Assistant online";
+      } catch (error) {
+        console.error(error);
+
+        statusElement.classList.remove(
+          "online"
+        );
+
+        statusElement.classList.add(
+          "offline"
+        );
+
+        statusText.textContent =
+          "Assistant offline";
+      }
+    }
+
+    /* =========================
+       TOPIC
+    ========================== */
+
+    function selectTopic(topic) {
+      const input =
+        document.getElementById("topicInput");
+
+      input.value = topic;
+      input.focus();
+    }
+
+    async function generateLesson() {
+      const topicInput =
+        document.getElementById("topicInput");
+
+      const topic =
+        topicInput.value.trim();
+
+      if (!topic) {
+        showToast(
+          "Please enter a topic first.",
+          "error"
+        );
+
+        topicInput.focus();
+
+        return;
+      }
+
+      showLoading(
+        "Creating your lesson",
+        [
+          `Understanding “${topic}”...`,
+          "Organizing the important concepts...",
+          "Preparing a clear explanation...",
+          "Adding examples and common mistakes...",
+          "Finalizing your personalized lesson..."
+        ]
+      );
+
+      try {
+        const sessionResponse = await fetch(
+          `${API_BASE_URL}/api/session/topic`,
+          {
+            method: "POST",
+
+            headers: {
+              "Content-Type":
+                "application/json"
+            },
+
+            body: JSON.stringify({
+              topic: topic
+            })
+          }
+        );
+
+        const sessionData =
+          await sessionResponse.json();
+
+        if (!sessionResponse.ok) {
+          throw new Error(
+            sessionData.message ||
+            "Could not create study session"
+          );
+        }
+
+        const explanationResponse =
+          await fetch(
+            `${API_BASE_URL}/api/explanation`,
+            {
+              method: "POST",
+
+              headers: {
+                "Content-Type":
+                  "application/json"
+              },
+
+              body: JSON.stringify({
+                sessionId:
+                  sessionData.sessionId
+              })
+            }
+          );
+
+        const explanationData =
+          await explanationResponse.json();
+
+        if (!explanationResponse.ok) {
+          throw new Error(
+            explanationData.message ||
+            "Could not generate lesson"
+          );
+        }
+
+        hideLoading();
+
+        displayLesson(
+          explanationData.explanation
+        );
+      } catch (error) {
+        hideLoading();
+
+        showToast(
+          error.message,
+          "error"
+        );
+      }
+    }
+
+    /* =========================
+       DISPLAY LESSON
+    ========================== */
+
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    function displayLesson(explanation) {
+      const homeSection =
+        document.getElementById(
+          "homeSection"
+        );
+
+      const lessonSection =
+        document.getElementById(
+          "lessonSection"
+        );
+
+      const keyConcepts =
+        explanation.keyConcepts || [];
+
+      homeSection.style.display =
+        "none";
+
+      lessonSection.innerHTML = `
+        <div class="lesson-header">
+          <div class="eyebrow">
+            Your AI lesson
+          </div>
+
+          <h2>
+            ${escapeHtml(
+              explanation.title ||
+              "Generated Lesson"
+            )}
+          </h2>
+
+          <p>
+            ${escapeHtml(
+              explanation.overview || ""
+            )}
+          </p>
+        </div>
+
+        <div class="lesson-grid">
+          ${keyConcepts
+            .map(
+              (concept, index) => `
+                <article class="lesson-card">
+                  <div class="lesson-number">
+                    ${String(index + 1)
+                      .padStart(2, "0")}
+                  </div>
+
+                  <h3>
+                    ${escapeHtml(
+                      concept.name
+                    )}
+                  </h3>
+
+                  <p>
+                    ${escapeHtml(
+                      concept.explanation
+                    )}
+                  </p>
+                </article>
+              `
+            )
+            .join("")}
+        </div>
+
+        <button
+          class="back-button"
+          type="button"
+          onclick="showHome()"
+        >
+          ← Back to home
+        </button>
+      `;
+
+      lessonSection.classList.add(
+        "show"
+      );
+
+      window.scrollTo({
+        top: 0,
+        behavior: "smooth"
+      });
+    }
+
+    function showHome() {
+      document.getElementById(
+        "homeSection"
+      ).style.display = "block";
+
+      document.getElementById(
+        "lessonSection"
+      ).classList.remove("show");
+
+      window.scrollTo({
+        top: 0,
+        behavior: "smooth"
+      });
+    }
+
+    function showRecallMessage() {
+      showToast(
+        "Recall feature will appear after weak concepts are scheduled.",
+        "success"
+      );
+    }
+
+    /* =========================
+       PDF
+    ========================== */
+
+    const pdfInput =
+      document.getElementById("pdfInput");
+
+    const fileName =
+      document.getElementById("fileName");
+
+    const uploadBox =
+      document.getElementById("uploadBox");
+
+    pdfInput.addEventListener(
+      "change",
+      function () {
+        const file =
+          pdfInput.files[0];
+
+        if (!file) {
+          selectedPdf = null;
+
+          fileName.textContent =
+            "No file selected";
+
+          return;
+        }
+
+        if (
+          file.type !== "application/pdf" &&
+          !file.name
+            .toLowerCase()
+            .endsWith(".pdf")
+        ) {
+          selectedPdf = null;
+
+          fileName.textContent =
+            "No file selected";
+
+          pdfInput.value = "";
+
+          showToast(
+            "Please select a PDF file.",
+            "error"
+          );
+
+          return;
+        }
+
+        selectedPdf = file;
+
+        fileName.textContent =
+          `${file.name} · ` +
+          `${(
+            file.size /
+            1024 /
+            1024
+          ).toFixed(2)} MB`;
+      }
+    );
+
+    [
+      "dragenter",
+      "dragover"
+    ].forEach(function (eventName) {
+      uploadBox.addEventListener(
+        eventName,
+        function (event) {
+          event.preventDefault();
+
+          uploadBox.classList.add(
+            "dragging"
+          );
+        }
+      );
+    });
+
+    [
+      "dragleave",
+      "drop"
+    ].forEach(function (eventName) {
+      uploadBox.addEventListener(
+        eventName,
+        function (event) {
+          event.preventDefault();
+
+          uploadBox.classList.remove(
+            "dragging"
+          );
+        }
+      );
+    });
+
+    uploadBox.addEventListener(
+      "drop",
+      function (event) {
+        const file =
+          event.dataTransfer.files[0];
+
+        if (!file) {
+          return;
+        }
+
+        if (
+          file.type !== "application/pdf" &&
+          !file.name
+            .toLowerCase()
+            .endsWith(".pdf")
+        ) {
+          showToast(
+            "Please drop a PDF file.",
+            "error"
+          );
+
+          return;
+        }
+
+        selectedPdf = file;
+
+        fileName.textContent =
+          `${file.name} · ` +
+          `${(
+            file.size /
+            1024 /
+            1024
+          ).toFixed(2)} MB`;
+      }
+    );
+
+    function studyPdf() {
+      if (!selectedPdf) {
+        showToast(
+          "Please select a PDF first.",
+          "error"
+        );
+
+        return;
+      }
+
+      showToast(
+        "PDF is selected. Add the PDF backend route to process it.",
+        "success"
+      );
+    }
+
+    /* =========================
+       LOADING
+    ========================== */
+
+    function showLoading(
+      title,
+      messages
+    ) {
+      const overlay =
+        document.getElementById(
+          "loadingOverlay"
+        );
+
+      const titleElement =
+        document.getElementById(
+          "loadingTitle"
+        );
+
+      const messageElement =
+        document.getElementById(
+          "loadingMessage"
+        );
+
+      titleElement.textContent =
+        title;
+
+      let index = 0;
+
+      messageElement.textContent =
+        messages[0];
+
+      overlay.classList.add("show");
+
+      clearInterval(
+        loadingInterval
+      );
+
+      loadingInterval =
+        setInterval(function () {
+          index =
+            (index + 1) %
+            messages.length;
+
+          messageElement.textContent =
+            messages[index];
+        }, 1700);
+    }
+
+    function hideLoading() {
+      clearInterval(
+        loadingInterval
+      );
+
+      document
+        .getElementById(
+          "loadingOverlay"
+        )
+        .classList.remove("show");
+    }
+
+    /* =========================
+       TOAST
+    ========================== */
+
+    function showToast(
+      message,
+      type = "success"
+    ) {
+      const toast =
+        document.getElementById(
+          "toast"
+        );
+
+      toast.textContent = message;
+
+      toast.className =
+        `toast show ${type}`;
+
+      clearTimeout(
+        toast.hideTimeout
+      );
+
+      toast.hideTimeout =
+        setTimeout(function () {
+          toast.classList.remove(
+            "show"
+          );
+        }, 3500);
+    }
+
+    /* =========================
+       INITIALIZATION
+    ========================== */
+
+    document
+      .getElementById("topicInput")
+      .addEventListener(
+        "keydown",
+        function (event) {
+          if (event.key === "Enter") {
+            generateLesson();
+          }
+        }
+      );
+
+    initializeTheme();
+    checkAssistantStatus();
+  </script>
+</body>
+</html>
