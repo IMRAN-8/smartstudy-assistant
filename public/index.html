@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="SmartStudy Assistant - AI powered adaptive learning platform" />
+  <meta name="theme-color" content="#06111f" />
+  <title>SmartStudy Assistant</title>
+
+  <!-- External libraries for Phase 1 -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.10.0/styles/github-dark.min.css" />
+  <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.10.0/lib/highlight.min.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <div class="background-grid"></div>
+
+  <header>
+    <nav class="navbar">
+      <div class="brand">
+        <div class="brand-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none">
+            <path d="M4 6.5 12 3l8 3.5-8 3.5-8-3.5Z" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round" />
+            <path d="M7 8.2v5.1c0 1.2 2.2 2.7 5 2.7s5-1.5 5-2.7V8.2" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" />
+          </svg>
+        </div>
+        <div>
+          <div class="brand-title">Smart<span>Study</span> Assistant</div>
+          <div class="brand-subtitle">Adaptive Learning Platform</div>
+        </div>
+      </div>
+
+      <div class="nav-right">
+        <div id="assistantStatus" class="assistant-status">
+          <span class="status-dot"></span>
+          <span id="assistantStatusText">Checking assistant</span>
+        </div>
+        <button class="nav-button active" type="button" onclick="showHome()">Home</button>
+        <button class="nav-button recall-button" type="button" onclick="showRecallMessage()">Recall Due</button>
+        <button id="themeButton" class="theme-button" type="button" aria-label="Change theme" title="Change theme">
+          <svg id="themeIcon" viewBox="0 0 24 24" fill="none"></svg>
+        </button>
+      </div>
+    </nav>
+  </header>
+
+  <main>
+    <section id="homeSection">
+      <div class="hero">
+        <div class="hero-left">
+          <div class="eyebrow"><span>✦</span> AI-Powered Active Learning</div>
+          <h1 class="hero-heading">Learn deeply.<br /><span class="gradient-text">Remember longer.</span></h1>
+          <p class="hero-description">
+            Turn any topic or PDF into a clear lesson, a personalized assessment, a weak-concept diagnosis,
+            targeted re-teaching, and spaced-recall reviews.
+          </p>
+
+          <div class="feature-list">
+            <span class="feature"><span class="feature-check">✓</span> Topic or PDF</span>
+            <span class="feature"><span class="feature-check">✓</span> Smart assessment</span>
+            <span class="feature"><span class="feature-check">✓</span> Weak-area diagnosis</span>
+            <span class="feature"><span class="feature-check">✓</span> Spaced recall</span>
+          </div>
+        </div>
+
+        <div class="hero-right">
+          <div class="study-card">
+            <div class="card-heading">
+              <div class="card-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none">
+                  <path d="M5 4.5h10.5A2.5 2.5 0 0 1 18 7v12H7.5A2.5 2.5 0 0 1 5 16.5v-12Z" stroke="currentColor" stroke-width="1.8" />
+                  <path d="M7.5 19A2.5 2.5 0 0 1 5 16.5 2.5 2.5 0 0 1 7.5 14H18" stroke="currentColor" stroke-width="1.8" />
+                </svg>
+              </div>
+              <h2 class="card-title">Study a topic</h2>
+            </div>
+            <p class="card-description">Type a subject, chapter, theory, formula, or concept.</p>
+            <label for="topicInput">Topic name</label>
+            <input id="topicInput" class="topic-input" type="text" autocomplete="off" maxlength="240" placeholder="e.g. Operating System Deadlock" />
+            <div class="suggestions">
+              <button class="suggestion-button" type="button" onclick="selectTopic('Database Normalization')">Database Normalization</button>
+              <button class="suggestion-button" type="button" onclick="selectTopic('Fourier Series')">Fourier Series</button>
+              <button class="suggestion-button" type="button" onclick="selectTopic('Java Inheritance')">Java Inheritance</button>
+            </div>
+            <button id="generateButton" class="primary-button" type="button" onclick="generateLesson()">+ &nbsp; Generate my lesson</button>
+            <button id="takeExamButton" class="ghost-button" type="button" onclick="startExam()" style="display:none;">Take Exam</button>
+          </div>
+
+          <div class="study-card">
+            <div class="card-heading">
+              <div class="card-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none">
+                  <path d="M7 3h7l4 4v14H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z" stroke="currentColor" stroke-width="1.8" />
+                  <path d="M14 3v5h5M9 13h6M9 17h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+                </svg>
+              </div>
+              <h2 class="card-title">Study from a PDF</h2>
+            </div>
+            <p class="card-description">Upload a text-based PDF and SSA will turn it into a learning session.</p>
+            <label id="uploadBox" class="upload-box" for="pdfInput">
+              <input id="pdfInput" type="file" accept=".pdf,application/pdf" />
+              <div>
+                <div class="upload-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none">
+                    <path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" />
+                    <path d="M5 14v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" />
+                  </svg>
+                </div>
+                <div class="upload-title">Drop your PDF here</div>
+                <div class="upload-subtitle">or click to browse</div>
+                <div id="fileName" class="file-name">No file selected</div>
+              </div>
+            </label>
+            <button id="pdfButton" class="secondary-button" type="button" onclick="studyPdf()">Study from selected PDF</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="lessonSection" class="lesson-section"></section>
+    <section id="examSection" class="exam-section"></section>
+  </main>
+
+  <div id="loadingOverlay" class="loading-overlay">
+    <div class="loading-card">
+      <div class="loader-visual">
+        <div class="loader-ring"></div>
+        <div class="loader-ring second"></div>
+        <div class="loader-core" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none">
+            <path d="M9.5 4.5A3.5 3.5 0 0 0 6 8v1a3 3 0 0 0-1 5.83V16a4 4 0 0 0 4 4h1V4.5h-.5ZM14.5 4.5A3.5 3.5 0 0 1 18 8v1a3 3 0 0 1 1 5.83V16a4 4 0 0 1-4 4h-1V4.5h.5Z" stroke="currentColor" stroke-width="1.75" />
+          </svg>
+        </div>
+      </div>
+      <h2 id="loadingTitle" class="loading-title">Creating your lesson</h2>
+      <p id="loadingMessage" class="loading-message">Understanding your topic...</p>
+      <div class="progress-track"><div class="progress-bar"></div></div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast"></div>
+
+  <script src="./app.js"></script>
+</body>
+</html>
