@@ -2,18 +2,24 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0"
+  />
+
   <meta
     name="description"
-    content="SmartStudy Assistant — AI-powered adaptive learning, assessment, weak-concept diagnosis, re-teaching and spaced recall."
+    content="SmartStudy Assistant - AI powered adaptive learning platform"
   />
-  <meta name="theme-color" content="#07111f" />
+
   <title>SmartStudy Assistant</title>
 
   <style>
-    /* =========================================================
-       1. DESIGN TOKENS
-       ========================================================= */
+    /* =========================
+       BASIC RESET
+    ========================== */
+
     * {
       box-sizing: border-box;
       margin: 0;
@@ -21,58 +27,46 @@
     }
 
     :root {
-      --bg: #07111f;
-      --bg-soft: #0b1728;
-      --surface: rgba(15, 30, 50, 0.78);
-      --surface-solid: #0f1e32;
-      --surface-2: #142640;
-      --line: rgba(148, 163, 184, 0.16);
-      --line-strong: rgba(103, 232, 249, 0.28);
+      --background: #06111f;
+      --background-secondary: #0a1728;
 
-      --text: #eef6ff;
-      --muted: #9fb0c6;
-      --muted-2: #70839d;
+      --card: rgba(15, 31, 52, 0.9);
+      --card-secondary: #10243b;
 
-      --brand: #5eead4;
-      --brand-2: #38bdf8;
-      --brand-3: #818cf8;
-      --brand-dark: #042f2e;
+      --text: #f1f7ff;
+      --muted: #a5b4c8;
 
-      --good: #34d399;
-      --bad: #fb7185;
-      --warn: #fbbf24;
+      --border: rgba(148, 163, 184, 0.16);
+      --border-active: rgba(71, 221, 218, 0.4);
 
-      --shadow-sm: 0 12px 34px rgba(0, 0, 0, 0.18);
-      --shadow-lg: 0 28px 90px rgba(0, 0, 0, 0.35);
+      --primary: #53e0d4;
+      --primary-secondary: #38bdf8;
+      --primary-dark: #062b30;
 
-      --radius-sm: 12px;
-      --radius-md: 18px;
-      --radius-lg: 28px;
+      --success: #34d399;
+      --danger: #fb7185;
 
-      --container: 1120px;
-      --header-height: 74px;
+      --shadow: 0 25px 70px rgba(0, 0, 0, 0.3);
     }
 
     body.light {
-      --bg: #f4f8fc;
-      --bg-soft: #eaf1f8;
-      --surface: rgba(255, 255, 255, 0.82);
-      --surface-solid: #ffffff;
-      --surface-2: #f4f8fc;
-      --line: rgba(15, 23, 42, 0.09);
-      --line-strong: rgba(8, 145, 178, 0.22);
+      --background: #f3f7fb;
+      --background-secondary: #e9f1f8;
+
+      --card: rgba(255, 255, 255, 0.9);
+      --card-secondary: #f5f8fc;
 
       --text: #102033;
-      --muted: #5e7188;
-      --muted-2: #8292a5;
+      --muted: #63758b;
 
-      --brand: #0fbaa9;
-      --brand-2: #0284c7;
-      --brand-3: #6366f1;
-      --brand-dark: #ecfeff;
+      --border: rgba(15, 23, 42, 0.1);
+      --border-active: rgba(8, 145, 178, 0.35);
 
-      --shadow-sm: 0 12px 35px rgba(15, 23, 42, 0.08);
-      --shadow-lg: 0 30px 90px rgba(15, 23, 42, 0.12);
+      --primary: #13b8aa;
+      --primary-secondary: #0284c7;
+      --primary-dark: #ecfeff;
+
+      --shadow: 0 25px 70px rgba(15, 23, 42, 0.12);
     }
 
     html {
@@ -81,23 +75,37 @@
 
     body {
       min-height: 100vh;
-      overflow-x: hidden;
+
       color: var(--text);
+
       background:
-        radial-gradient(circle at 8% 8%, rgba(56, 189, 248, 0.14), transparent 28rem),
-        radial-gradient(circle at 92% 14%, rgba(129, 140, 248, 0.14), transparent 30rem),
-        radial-gradient(circle at 50% 100%, rgba(94, 234, 212, 0.08), transparent 34rem),
-        var(--bg);
+        radial-gradient(
+          circle at 15% 15%,
+          rgba(56, 189, 248, 0.12),
+          transparent 30rem
+        ),
+        radial-gradient(
+          circle at 85% 20%,
+          rgba(99, 102, 241, 0.12),
+          transparent 30rem
+        ),
+        var(--background);
+
       font-family:
-        Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
-        "Segoe UI", sans-serif;
-      line-height: 1.65;
-      transition: background 0.25s ease, color 0.25s ease;
+        Inter,
+        system-ui,
+        -apple-system,
+        BlinkMacSystemFont,
+        "Segoe UI",
+        sans-serif;
+
+      transition:
+        background 0.3s ease,
+        color 0.3s ease;
     }
 
     button,
-    input,
-    textarea {
+    input {
       font: inherit;
     }
 
@@ -105,1315 +113,1002 @@
       color: inherit;
     }
 
-    a {
-      color: inherit;
-      text-decoration: none;
-    }
+    /* =========================
+       BACKGROUND GRID
+    ========================== */
 
-    ul {
-      padding-left: 1.2rem;
-    }
-
-    li + li {
-      margin-top: 0.45rem;
-    }
-
-    strong {
-      color: var(--text);
-    }
-
-    ::selection {
-      color: #032526;
-      background: var(--brand);
-    }
-
-    /* =========================================================
-       2. BACKGROUND DECORATION
-       ========================================================= */
     .background-grid {
       position: fixed;
       inset: 0;
-      z-index: -3;
-      pointer-events: none;
-      opacity: 0.34;
-      background-image:
-        linear-gradient(var(--line) 1px, transparent 1px),
-        linear-gradient(90deg, var(--line) 1px, transparent 1px);
-      background-size: 42px 42px;
-      mask-image: linear-gradient(to bottom, black, transparent 82%);
-    }
 
-    .orb {
-      position: fixed;
       z-index: -2;
-      width: 25rem;
-      height: 25rem;
-      border-radius: 999px;
-      filter: blur(85px);
       pointer-events: none;
-      opacity: 0.12;
+
+      opacity: 0.32;
+
+      background-image:
+        linear-gradient(var(--border) 1px, transparent 1px),
+        linear-gradient(90deg, var(--border) 1px, transparent 1px);
+
+      background-size: 42px 42px;
+
+      mask-image:
+        linear-gradient(
+          to bottom,
+          black,
+          transparent 90%
+        );
     }
 
-    .orb-one {
-      top: 8rem;
-      left: -10rem;
-      background: var(--brand-2);
-    }
+    /* =========================
+       HEADER
+    ========================== */
 
-    .orb-two {
-      top: 20rem;
-      right: -10rem;
-      background: var(--brand-3);
-    }
-
-    /* =========================================================
-       3. HEADER / NAVIGATION
-       ========================================================= */
-    .site-header {
+    header {
       position: sticky;
       top: 0;
+
       z-index: 50;
-      height: var(--header-height);
-      border-bottom: 1px solid var(--line);
-      background: color-mix(in srgb, var(--bg) 80%, transparent);
+
+      border-bottom: 1px solid var(--border);
+
+      background:
+        color-mix(
+          in srgb,
+          var(--background) 82%,
+          transparent
+        );
+
       backdrop-filter: blur(18px);
       -webkit-backdrop-filter: blur(18px);
     }
 
-    .header-inner {
-      width: min(var(--container), calc(100% - 32px));
-      height: 100%;
+    .navbar {
+      width: min(1460px, calc(100% - 40px));
+      min-height: 84px;
+
       margin-inline: auto;
+
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 1rem;
+
+      gap: 20px;
     }
 
-    .brand-mark {
-      display: inline-flex;
+    .brand {
+      display: flex;
       align-items: center;
-      gap: 0.75rem;
-      border: 0;
-      background: transparent;
-      cursor: pointer;
-      text-align: left;
+
+      gap: 14px;
     }
 
-    .brand-logo {
-      width: 42px;
-      height: 42px;
+    .brand-icon {
+      width: 48px;
+      height: 48px;
+
       display: grid;
       place-items: center;
-      border: 1px solid var(--line-strong);
-      border-radius: 14px;
-      color: #042f2e;
-      background: linear-gradient(135deg, var(--brand), var(--brand-2));
-      box-shadow: 0 10px 30px rgba(56, 189, 248, 0.16);
+
+      border-radius: 16px;
+
+      color: #062b30;
+
+      background:
+        linear-gradient(
+          135deg,
+          var(--primary),
+          var(--primary-secondary)
+        );
+
+      box-shadow:
+        0 12px 30px rgba(56, 189, 248, 0.2);
     }
 
-    .brand-logo svg {
-      width: 23px;
-      height: 23px;
+    .brand-icon svg {
+      width: 26px;
+      height: 26px;
     }
 
-    .brand-copy {
-      display: grid;
-      line-height: 1.1;
+    .brand-title {
+      font-size: 20px;
+      font-weight: 800;
+      letter-spacing: -0.03em;
     }
 
-    .brand-copy strong {
-      font-size: 1rem;
-      letter-spacing: -0.025em;
+    .brand-title span {
+      color: var(--primary);
     }
 
-    .brand-copy small {
-      margin-top: 0.22rem;
+    .brand-subtitle {
+      margin-top: 3px;
+
       color: var(--muted);
-      font-size: 0.71rem;
-      letter-spacing: 0.09em;
+
+      font-size: 11px;
+      font-weight: 700;
+
+      letter-spacing: 0.14em;
       text-transform: uppercase;
     }
 
-    .brand-copy strong span {
-      color: var(--brand);
-    }
-
-    .nav-actions {
+    .nav-right {
       display: flex;
       align-items: center;
-      gap: 0.55rem;
+
+      gap: 14px;
+    }
+
+    .assistant-status {
+      display: flex;
+      align-items: center;
+
+      gap: 8px;
+
+      color: var(--muted);
+
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .status-dot {
+      width: 9px;
+      height: 9px;
+
+      border-radius: 50%;
+
+      background: #fbbf24;
+
+      box-shadow:
+        0 0 12px #fbbf24;
+    }
+
+    .assistant-status.online .status-dot {
+      background: var(--success);
+
+      box-shadow:
+        0 0 14px var(--success);
+    }
+
+    .assistant-status.offline .status-dot {
+      background: var(--danger);
+
+      box-shadow:
+        0 0 14px var(--danger);
     }
 
     .nav-button,
-    .icon-button {
-      min-height: 42px;
-      border: 1px solid transparent;
-      border-radius: 12px;
-      background: transparent;
+    .theme-button {
+      min-height: 48px;
+
+      border: 1px solid var(--border);
+      border-radius: 14px;
+
+      color: var(--muted);
+      background: var(--card);
+
+      font-weight: 750;
+
       cursor: pointer;
+
       transition: 0.2s ease;
     }
 
     .nav-button {
-      padding: 0.6rem 0.9rem;
-      color: var(--muted);
-      font-weight: 650;
+      padding: 0 18px;
+    }
+
+    .theme-button {
+      width: 48px;
+
+      display: grid;
+      place-items: center;
+    }
+
+    .theme-button svg {
+      width: 21px;
+      height: 21px;
     }
 
     .nav-button:hover,
-    .nav-button.active {
+    .theme-button:hover {
       color: var(--text);
-      border-color: var(--line);
-      background: var(--surface);
-    }
 
-    .icon-button {
-      width: 42px;
-      display: grid;
-      place-items: center;
-      color: var(--muted);
-      border-color: var(--line);
-      background: var(--surface);
-    }
+      border-color: var(--border-active);
 
-    .icon-button:hover {
-      color: var(--text);
-      border-color: var(--line-strong);
       transform: translateY(-1px);
     }
 
-    .icon-button svg {
-      width: 19px;
-      height: 19px;
+    .nav-button.active {
+      color: var(--text);
+      border-color: var(--border-active);
     }
 
-    /* =========================================================
-       4. LAYOUT / REUSABLE UI
-       ========================================================= */
+    /* =========================
+       MAIN LAYOUT
+    ========================== */
+
     main {
-      width: min(var(--container), calc(100% - 32px));
-      min-height: calc(100vh - var(--header-height));
+      width: min(1460px, calc(100% - 40px));
+
       margin-inline: auto;
-      padding: 2rem 0 5rem;
+      padding: 28px 0 60px;
     }
 
-    .hidden {
-      display: none !important;
-    }
-
-    .section {
-      animation: fade-up 0.42s ease both;
-    }
-
-    .page-stack {
+    .hero {
       display: grid;
-      gap: 1.1rem;
+
+      grid-template-columns:
+        minmax(0, 1.2fr)
+        minmax(420px, 0.8fr);
+
+      gap: 22px;
     }
 
-    .grid {
-      display: grid;
-      gap: 1rem;
-    }
+    .hero-left,
+    .hero-right {
+      border: 1px solid var(--border);
+      border-radius: 32px;
 
-    .grid.two {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
+      background: var(--card);
 
-    .grid.three {
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-    }
+      box-shadow: var(--shadow);
 
-    .card {
-      position: relative;
-      overflow: hidden;
-      padding: 1.35rem;
-      border: 1px solid var(--line);
-      border-radius: var(--radius-md);
-      background: var(--surface);
-      box-shadow: var(--shadow-sm);
       backdrop-filter: blur(16px);
       -webkit-backdrop-filter: blur(16px);
     }
 
-    .card::before {
-      content: "";
-      position: absolute;
-      inset: 0 auto auto 0;
-      width: 100%;
-      height: 1px;
-      background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.18), transparent);
-      pointer-events: none;
-    }
+    /* =========================
+       LEFT HERO
+    ========================== */
 
-    .card-title-row {
+    .hero-left {
+      min-height: 850px;
+
       display: flex;
-      align-items: flex-start;
-      justify-content: space-between;
-      gap: 1rem;
+      flex-direction: column;
+      justify-content: center;
+
+      padding: clamp(40px, 7vw, 90px);
     }
 
     .eyebrow {
+      width: fit-content;
+
       display: inline-flex;
       align-items: center;
-      gap: 0.45rem;
-      width: fit-content;
-      padding: 0.38rem 0.7rem;
-      border: 1px solid var(--line-strong);
+
+      gap: 8px;
+
+      padding: 9px 16px;
+
+      border: 1px solid var(--border-active);
       border-radius: 999px;
-      color: var(--brand);
-      background: rgba(94, 234, 212, 0.06);
-      font-size: 0.78rem;
-      font-weight: 750;
+
+      color: var(--primary);
+
+      background:
+        rgba(83, 224, 212, 0.06);
+
+      font-size: 13px;
+      font-weight: 850;
+
       letter-spacing: 0.04em;
       text-transform: uppercase;
     }
 
-    h1,
-    h2,
-    h3 {
-      line-height: 1.18;
-      letter-spacing: -0.035em;
-    }
+    .hero-heading {
+      max-width: 760px;
 
-    h2 {
-      font-size: clamp(1.65rem, 3vw, 2.3rem);
-    }
+      margin-top: 35px;
 
-    h3 {
-      font-size: 1.08rem;
-    }
+      font-size:
+        clamp(
+          64px,
+          7vw,
+          105px
+        );
 
-    p {
-      color: var(--text);
-    }
+      line-height: 0.97;
 
-    .muted {
-      color: var(--muted);
-    }
-
-    .small {
-      font-size: 0.88rem;
-    }
-
-    .center {
-      text-align: center;
-    }
-
-    .divider {
-      height: 1px;
-      margin: 1rem 0;
-      border: 0;
-      background: var(--line);
-    }
-
-    .stack-sm {
-      display: grid;
-      gap: 0.6rem;
-    }
-
-    .stack-md {
-      display: grid;
-      gap: 1rem;
-    }
-
-    .row {
-      display: flex;
-      align-items: center;
-      gap: 0.7rem;
-      flex-wrap: wrap;
-    }
-
-    .pill {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      width: fit-content;
-      padding: 0.28rem 0.65rem;
-      border: 1px solid var(--line);
-      border-radius: 999px;
-      color: var(--muted);
-      background: var(--surface-2);
-      font-size: 0.75rem;
-      font-weight: 750;
-      text-transform: capitalize;
-    }
-
-    .sev-high {
-      color: var(--bad);
-      border-color: color-mix(in srgb, var(--bad) 48%, transparent);
-      background: color-mix(in srgb, var(--bad) 8%, transparent);
-    }
-
-    .sev-medium {
-      color: var(--warn);
-      border-color: color-mix(in srgb, var(--warn) 48%, transparent);
-      background: color-mix(in srgb, var(--warn) 8%, transparent);
-    }
-
-    .sev-low {
-      color: var(--good);
-      border-color: color-mix(in srgb, var(--good) 48%, transparent);
-      background: color-mix(in srgb, var(--good) 8%, transparent);
-    }
-
-    /* =========================================================
-       5. BUTTONS / INPUTS
-       ========================================================= */
-    .btn {
-      min-height: 48px;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      gap: 0.55rem;
-      padding: 0.75rem 1rem;
-      border: 0;
-      border-radius: 13px;
-      color: #032526;
-      background: linear-gradient(135deg, var(--brand), var(--brand-2));
-      box-shadow: 0 12px 28px rgba(56, 189, 248, 0.16);
-      font-weight: 800;
-      cursor: pointer;
-      transition: 0.2s ease;
-    }
-
-    .btn:hover:not(:disabled) {
-      transform: translateY(-2px);
-      box-shadow: 0 16px 34px rgba(56, 189, 248, 0.24);
-    }
-
-    .btn:active:not(:disabled) {
-      transform: translateY(0);
-    }
-
-    .btn:disabled {
-      cursor: not-allowed;
-      opacity: 0.62;
-    }
-
-    .btn.secondary {
-      color: var(--text);
-      border: 1px solid var(--line);
-      background: var(--surface-2);
-      box-shadow: none;
-    }
-
-    .btn.ghost {
-      color: var(--muted);
-      border: 1px solid transparent;
-      background: transparent;
-      box-shadow: none;
-    }
-
-    .btn.danger {
-      color: #fff1f2;
-      border: 1px solid rgba(251, 113, 133, 0.35);
-      background: rgba(251, 113, 133, 0.12);
-      box-shadow: none;
-    }
-
-    .btn.full {
-      width: 100%;
-    }
-
-    .btn.compact {
-      min-height: 40px;
-      padding: 0.55rem 0.8rem;
-      font-size: 0.9rem;
-    }
-
-    .btn svg {
-      width: 18px;
-      height: 18px;
-      flex: 0 0 auto;
-    }
-
-    .button-spinner {
-      width: 17px;
-      height: 17px;
-      border: 2px solid rgba(3, 37, 38, 0.25);
-      border-top-color: #032526;
-      border-radius: 999px;
-      animation: spin 0.75s linear infinite;
-    }
-
-    label.input-label {
-      display: block;
-      margin-bottom: 0.45rem;
-      color: var(--text);
-      font-size: 0.9rem;
-      font-weight: 750;
-    }
-
-    input[type="text"],
-    textarea {
-      width: 100%;
-      border: 1px solid var(--line);
-      border-radius: 13px;
-      outline: none;
-      color: var(--text);
-      background: color-mix(in srgb, var(--surface-solid) 76%, transparent);
-      transition: 0.2s ease;
-    }
-
-    input[type="text"] {
-      min-height: 54px;
-      padding: 0.85rem 1rem;
-    }
-
-    textarea {
-      min-height: 120px;
-      padding: 0.85rem 1rem;
-      resize: vertical;
-    }
-
-    input[type="text"]::placeholder,
-    textarea::placeholder {
-      color: var(--muted-2);
-    }
-
-    input[type="text"]:focus,
-    textarea:focus {
-      border-color: var(--brand-2);
-      box-shadow: 0 0 0 4px rgba(56, 189, 248, 0.11);
-    }
-
-    .input-shell {
-      position: relative;
-    }
-
-    .input-shell input {
-      padding-right: 3.2rem;
-    }
-
-    .input-action {
-      position: absolute;
-      top: 50%;
-      right: 0.45rem;
-      width: 40px;
-      height: 40px;
-      display: grid;
-      place-items: center;
-      border: 0;
-      border-radius: 10px;
-      color: #032526;
-      background: linear-gradient(135deg, var(--brand), var(--brand-2));
-      cursor: pointer;
-    }
-
-    .input-action svg {
-      width: 18px;
-      height: 18px;
-    }
-
-    /* =========================================================
-       6. HOME / HERO
-       ========================================================= */
-    .hero {
-      display: grid;
-      grid-template-columns: 1.18fr 0.82fr;
-      gap: 1.2rem;
-      align-items: stretch;
-      margin-top: 0.75rem;
-    }
-
-    .hero-copy {
-      min-height: 520px;
-      display: flex;
-      flex-direction: column;
-      justify-content: center;
-      padding: clamp(1.5rem, 5vw, 3.6rem);
-      border: 1px solid var(--line);
-      border-radius: var(--radius-lg);
-      background:
-        linear-gradient(145deg, rgba(56, 189, 248, 0.08), transparent 36%),
-        linear-gradient(315deg, rgba(129, 140, 248, 0.1), transparent 42%),
-        var(--surface);
-      box-shadow: var(--shadow-lg);
-      backdrop-filter: blur(18px);
-    }
-
-    .hero h1 {
-      max-width: 12ch;
-      margin-top: 1.2rem;
-      font-size: clamp(2.55rem, 6.5vw, 5.4rem);
-      line-height: 0.98;
+      letter-spacing: -0.065em;
     }
 
     .gradient-text {
       color: transparent;
-      background: linear-gradient(135deg, var(--brand), var(--brand-2), var(--brand-3));
+
+      background:
+        linear-gradient(
+          135deg,
+          var(--primary),
+          var(--primary-secondary),
+          #818cf8
+        );
+
       -webkit-background-clip: text;
       background-clip: text;
     }
 
     .hero-description {
-      max-width: 62ch;
-      margin-top: 1.25rem;
+      max-width: 760px;
+
+      margin-top: 28px;
+
       color: var(--muted);
-      font-size: 1.03rem;
+
+      font-size: 19px;
+      line-height: 1.7;
     }
 
-    .hero-badges {
+    .feature-list {
       display: flex;
       flex-wrap: wrap;
-      gap: 0.55rem;
-      margin-top: 1.35rem;
+
+      gap: 12px;
+
+      margin-top: 30px;
     }
 
-    .feature-chip {
+    .feature {
       display: inline-flex;
       align-items: center;
-      gap: 0.4rem;
-      padding: 0.48rem 0.72rem;
-      border: 1px solid var(--line);
+
+      gap: 8px;
+
+      padding: 10px 15px;
+
+      border: 1px solid var(--border);
       border-radius: 999px;
+
       color: var(--muted);
-      background: rgba(255, 255, 255, 0.025);
-      font-size: 0.82rem;
-      font-weight: 680;
+
+      background:
+        color-mix(
+          in srgb,
+          var(--card-secondary) 75%,
+          transparent
+        );
+
+      font-size: 14px;
+      font-weight: 700;
     }
 
-    .feature-chip span {
-      color: var(--brand);
+    .feature-check {
+      color: var(--primary);
     }
 
-    .hero-panel {
-      display: grid;
-      gap: 1rem;
-      padding: 1.1rem;
-      border: 1px solid var(--line);
-      border-radius: var(--radius-lg);
-      background: var(--surface);
-      box-shadow: var(--shadow-lg);
-      backdrop-filter: blur(18px);
+    /* =========================
+       RIGHT HERO
+    ========================== */
+
+    .hero-right {
+      padding: 22px;
     }
 
     .study-card {
-      padding: 1.15rem;
-      border: 1px solid var(--line);
-      border-radius: 20px;
-      background: color-mix(in srgb, var(--surface-solid) 72%, transparent);
+      padding: 24px;
+
+      border: 1px solid var(--border);
+      border-radius: 25px;
+
+      background:
+        color-mix(
+          in srgb,
+          var(--card-secondary) 84%,
+          transparent
+        );
     }
 
-    .study-card h3 {
+    .study-card + .study-card {
+      margin-top: 20px;
+    }
+
+    .card-heading {
       display: flex;
       align-items: center;
-      gap: 0.55rem;
-      margin-bottom: 0.45rem;
+
+      gap: 12px;
     }
 
-    .study-card h3 span {
-      width: 34px;
-      height: 34px;
+    .card-icon {
+      width: 42px;
+      height: 42px;
+
       display: grid;
       place-items: center;
-      border: 1px solid var(--line-strong);
-      border-radius: 10px;
-      color: var(--brand);
-      background: rgba(94, 234, 212, 0.07);
+
+      border: 1px solid var(--border-active);
+      border-radius: 13px;
+
+      color: var(--primary);
+
+      background:
+        rgba(83, 224, 212, 0.07);
     }
 
-    .study-card h3 svg {
-      width: 18px;
-      height: 18px;
+    .card-icon svg {
+      width: 22px;
+      height: 22px;
     }
 
-    .topic-suggestions {
+    .card-title {
+      font-size: 21px;
+      font-weight: 800;
+    }
+
+    .card-description {
+      margin-top: 15px;
+
+      color: var(--muted);
+
+      font-size: 15px;
+      line-height: 1.6;
+    }
+
+    label {
+      display: block;
+
+      margin-top: 20px;
+      margin-bottom: 8px;
+
+      font-size: 15px;
+      font-weight: 800;
+    }
+
+    .topic-input {
+      width: 100%;
+      min-height: 64px;
+
+      padding: 0 18px;
+
+      border: 1px solid var(--border);
+      border-radius: 16px;
+
+      outline: none;
+
+      color: var(--text);
+      background: var(--background-secondary);
+
+      font-size: 17px;
+
+      transition: 0.2s ease;
+    }
+
+    .topic-input::placeholder {
+      color:
+        color-mix(
+          in srgb,
+          var(--muted) 72%,
+          transparent
+        );
+    }
+
+    .topic-input:focus {
+      border-color: var(--primary-secondary);
+
+      box-shadow:
+        0 0 0 4px rgba(56, 189, 248, 0.1);
+    }
+
+    .suggestions {
       display: flex;
       flex-wrap: wrap;
-      gap: 0.45rem;
-      margin-top: 0.75rem;
+
+      gap: 9px;
+
+      margin-top: 14px;
     }
 
-    .suggestion {
-      padding: 0.38rem 0.6rem;
-      border: 1px solid var(--line);
+    .suggestion-button {
+      padding: 8px 13px;
+
+      border: 1px solid var(--border);
       border-radius: 999px;
+
       color: var(--muted);
       background: transparent;
-      font-size: 0.75rem;
+
+      font-size: 13px;
+
       cursor: pointer;
+
       transition: 0.2s ease;
     }
 
-    .suggestion:hover {
+    .suggestion-button:hover {
       color: var(--text);
-      border-color: var(--line-strong);
-      background: rgba(56, 189, 248, 0.06);
+      border-color: var(--border-active);
     }
 
-    .upload-zone {
+    .primary-button,
+    .secondary-button {
+      width: 100%;
+      min-height: 60px;
+
+      margin-top: 20px;
+      padding: 0 20px;
+
+      border: 0;
+      border-radius: 16px;
+
+      font-size: 17px;
+      font-weight: 850;
+
+      cursor: pointer;
+
+      transition: 0.2s ease;
+    }
+
+    .primary-button {
+      color: #062b30;
+
+      background:
+        linear-gradient(
+          135deg,
+          var(--primary),
+          var(--primary-secondary)
+        );
+
+      box-shadow:
+        0 14px 30px rgba(56, 189, 248, 0.16);
+    }
+
+    .primary-button:hover:not(:disabled) {
+      transform: translateY(-2px);
+
+      box-shadow:
+        0 18px 36px rgba(56, 189, 248, 0.24);
+    }
+
+    .secondary-button {
+      color: var(--text);
+
+      border: 1px solid var(--border);
+
+      background: var(--card-secondary);
+    }
+
+    .secondary-button:hover:not(:disabled) {
+      border-color: var(--border-active);
+    }
+
+    button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    /* =========================
+       PDF UPLOAD
+    ========================== */
+
+    .upload-box {
       position: relative;
-      min-height: 150px;
+
+      min-height: 195px;
+
       display: grid;
       place-items: center;
-      margin-top: 0.8rem;
-      padding: 1rem;
-      border: 1px dashed var(--line-strong);
-      border-radius: 16px;
+
+      margin-top: 18px;
+      padding: 25px;
+
+      border: 1px dashed var(--border-active);
+      border-radius: 19px;
+
       text-align: center;
-      background: rgba(56, 189, 248, 0.035);
+
+      background:
+        rgba(56, 189, 248, 0.03);
+
       cursor: pointer;
+
       transition: 0.2s ease;
     }
 
-    .upload-zone:hover,
-    .upload-zone.dragover {
-      border-color: var(--brand);
-      background: rgba(94, 234, 212, 0.07);
-      transform: translateY(-1px);
+    .upload-box:hover,
+    .upload-box.dragging {
+      border-color: var(--primary);
+
+      background:
+        rgba(83, 224, 212, 0.07);
     }
 
-    .upload-zone input {
+    .upload-box input {
       position: absolute;
       inset: 0;
+
       width: 100%;
       height: 100%;
+
       opacity: 0;
+
       cursor: pointer;
     }
 
     .upload-icon {
-      width: 46px;
-      height: 46px;
+      width: 54px;
+      height: 54px;
+
       display: grid;
       place-items: center;
-      margin: 0 auto 0.55rem;
-      border: 1px solid var(--line-strong);
-      border-radius: 15px;
-      color: var(--brand);
-      background: rgba(94, 234, 212, 0.07);
+
+      margin-inline: auto;
+
+      border: 1px solid var(--border-active);
+      border-radius: 16px;
+
+      color: var(--primary);
+
+      background:
+        rgba(83, 224, 212, 0.07);
     }
 
     .upload-icon svg {
-      width: 23px;
-      height: 23px;
+      width: 25px;
+      height: 25px;
+    }
+
+    .upload-title {
+      margin-top: 15px;
+
+      font-size: 18px;
+      font-weight: 850;
+    }
+
+    .upload-subtitle {
+      margin-top: 5px;
+
+      color: var(--muted);
+
+      font-size: 14px;
     }
 
     .file-name {
       max-width: 100%;
-      margin-top: 0.45rem;
+
+      margin-top: 8px;
+
       overflow: hidden;
-      color: var(--brand);
-      font-size: 0.82rem;
-      font-weight: 700;
+
+      color: var(--primary);
+
+      font-size: 14px;
+      font-weight: 750;
+
       text-overflow: ellipsis;
       white-space: nowrap;
     }
 
-    .workflow {
-      margin-top: 1.2rem;
-    }
+    /* =========================
+       LOADING OVERLAY
+    ========================== */
 
-    .section-heading {
-      display: flex;
-      align-items: flex-end;
-      justify-content: space-between;
-      gap: 1rem;
-      margin-bottom: 1rem;
-    }
+    .loading-overlay {
+      position: fixed;
+      inset: 0;
 
-    .section-heading p {
-      max-width: 55ch;
-      color: var(--muted);
-    }
+      z-index: 100;
 
-    .workflow-card {
-      min-height: 170px;
-      display: flex;
-      flex-direction: column;
-      justify-content: space-between;
-    }
-
-    .workflow-number {
-      color: var(--brand);
-      font-size: 0.78rem;
-      font-weight: 850;
-      letter-spacing: 0.08em;
-    }
-
-    .workflow-card h3 {
-      margin-top: 1.8rem;
-      font-size: 1.13rem;
-    }
-
-    .workflow-card p {
-      margin-top: 0.45rem;
-      color: var(--muted);
-      font-size: 0.9rem;
-    }
-
-    /* =========================================================
-       7. LOADING EXPERIENCE
-       ========================================================= */
-    .loader-wrap {
-      min-height: 62vh;
-      display: grid;
+      display: none;
       place-items: center;
-      padding: 2rem 0;
+
+      padding: 20px;
+
+      background:
+        rgba(2, 9, 18, 0.82);
+
+      backdrop-filter: blur(18px);
+      -webkit-backdrop-filter: blur(18px);
     }
 
-    .loader-card {
-      width: min(620px, 100%);
-      padding: clamp(1.4rem, 4vw, 2.3rem);
-      border: 1px solid var(--line);
-      border-radius: var(--radius-lg);
+    .loading-overlay.show {
+      display: grid;
+    }
+
+    .loading-card {
+      width: min(560px, 100%);
+
+      padding: 45px 35px;
+
+      border: 1px solid var(--border);
+      border-radius: 30px;
+
       text-align: center;
-      background:
-        radial-gradient(circle at 50% 0%, rgba(56, 189, 248, 0.13), transparent 44%),
-        var(--surface);
-      box-shadow: var(--shadow-lg);
-      backdrop-filter: blur(18px);
+
+      background: var(--card);
+
+      box-shadow: var(--shadow);
     }
 
     .loader-visual {
       position: relative;
-      width: 132px;
-      height: 132px;
-      margin: 0 auto 1.25rem;
+
+      width: 130px;
+      height: 130px;
+
+      margin:
+        0 auto
+        25px;
     }
 
     .loader-core {
       position: absolute;
       inset: 38px;
+
       display: grid;
       place-items: center;
-      border: 1px solid var(--line-strong);
-      border-radius: 21px;
-      color: #032526;
-      background: linear-gradient(135deg, var(--brand), var(--brand-2));
-      box-shadow: 0 0 42px rgba(56, 189, 248, 0.2);
-      animation: core-pulse 1.8s ease-in-out infinite;
+
+      border-radius: 22px;
+
+      color: #062b30;
+
+      background:
+        linear-gradient(
+          135deg,
+          var(--primary),
+          var(--primary-secondary)
+        );
+
+      animation:
+        pulse 1.8s ease-in-out infinite;
     }
 
     .loader-core svg {
-      width: 30px;
-      height: 30px;
+      width: 32px;
+      height: 32px;
     }
 
-    .orbit {
+    .loader-ring {
       position: absolute;
       inset: 0;
-      border: 1px solid rgba(94, 234, 212, 0.16);
-      border-radius: 999px;
-      animation: spin 4s linear infinite;
+
+      border: 1px solid var(--border-active);
+      border-radius: 50%;
+
+      animation:
+        spin 3.6s linear infinite;
     }
 
-    .orbit::after {
+    .loader-ring::after {
       content: "";
+
       position: absolute;
-      top: 7px;
+      top: 5px;
       left: 50%;
-      width: 10px;
-      height: 10px;
-      border-radius: 999px;
-      background: var(--brand);
-      box-shadow: 0 0 18px var(--brand);
+
+      width: 11px;
+      height: 11px;
+
+      border-radius: 50%;
+
+      background: var(--primary);
+
+      box-shadow:
+        0 0 18px var(--primary);
+
       transform: translateX(-50%);
     }
 
-    .orbit.two {
+    .loader-ring.second {
       inset: 15px;
-      border-color: rgba(129, 140, 248, 0.18);
-      animation-duration: 3s;
-      animation-direction: reverse;
+
+      animation:
+        spin 2.6s linear infinite reverse;
     }
 
-    .orbit.two::after {
+    .loader-ring.second::after {
       top: auto;
-      bottom: 5px;
-      background: var(--brand-3);
-      box-shadow: 0 0 18px var(--brand-3);
+      bottom: 4px;
+
+      background: #818cf8;
+
+      box-shadow:
+        0 0 18px #818cf8;
     }
 
-    .loader-card h2 {
-      margin-bottom: 0.55rem;
-      font-size: clamp(1.5rem, 4vw, 2rem);
+    .loading-title {
+      font-size: 27px;
+      font-weight: 850;
+
+      letter-spacing: -0.03em;
     }
 
-    .loader-step {
-      min-height: 1.7rem;
+    .loading-message {
+      min-height: 26px;
+
+      margin-top: 10px;
+
       color: var(--muted);
     }
 
     .progress-track {
       height: 7px;
-      margin-top: 1.35rem;
+
+      margin-top: 25px;
+
       overflow: hidden;
-      border: 1px solid var(--line);
+
       border-radius: 999px;
-      background: var(--surface-2);
+
+      background: var(--card-secondary);
     }
 
     .progress-bar {
       width: 42%;
       height: 100%;
+
       border-radius: inherit;
-      background: linear-gradient(90deg, var(--brand), var(--brand-2), var(--brand-3));
-      animation: loading-bar 2.1s ease-in-out infinite;
-    }
 
-    .loader-note {
-      margin-top: 0.9rem;
-      color: var(--muted-2);
-      font-size: 0.78rem;
-    }
-
-    /* =========================================================
-       8. LESSON
-       ========================================================= */
-    .page-hero {
-      padding: clamp(1.35rem, 4vw, 2rem);
-      border: 1px solid var(--line);
-      border-radius: var(--radius-lg);
       background:
-        linear-gradient(140deg, rgba(94, 234, 212, 0.07), transparent 40%),
-        var(--surface);
-      box-shadow: var(--shadow-sm);
+        linear-gradient(
+          90deg,
+          var(--primary),
+          var(--primary-secondary),
+          #818cf8
+        );
+
+      animation:
+        loadingProgress 2s ease-in-out infinite;
     }
 
-    .page-hero h2 {
-      margin-top: 0.8rem;
+    /* =========================
+       LESSON RESULT
+    ========================== */
+
+    .lesson-section {
+      display: none;
+
+      margin-top: 25px;
     }
 
-    .page-hero p {
-      max-width: 75ch;
-      margin-top: 0.7rem;
+    .lesson-section.show {
+      display: block;
+    }
+
+    .lesson-header,
+    .lesson-card {
+      border: 1px solid var(--border);
+      border-radius: 25px;
+
+      background: var(--card);
+
+      box-shadow: var(--shadow);
+    }
+
+    .lesson-header {
+      padding: 35px;
+    }
+
+    .lesson-header h2 {
+      margin-top: 15px;
+
+      font-size:
+        clamp(
+          32px,
+          4vw,
+          50px
+        );
+
+      letter-spacing: -0.04em;
+    }
+
+    .lesson-header p {
+      max-width: 900px;
+
+      margin-top: 15px;
+
       color: var(--muted);
+
+      line-height: 1.75;
     }
 
-    .concept-card {
-      min-height: 100%;
+    .lesson-grid {
+      display: grid;
+
+      grid-template-columns:
+        repeat(2, minmax(0, 1fr));
+
+      gap: 18px;
+
+      margin-top: 18px;
     }
 
-    .concept-icon {
-      width: 38px;
-      height: 38px;
+    .lesson-card {
+      padding: 25px;
+    }
+
+    .lesson-number {
+      width: 42px;
+      height: 42px;
+
       display: grid;
       place-items: center;
-      margin-bottom: 0.85rem;
-      border: 1px solid var(--line-strong);
-      border-radius: 12px;
-      color: var(--brand);
-      background: rgba(94, 234, 212, 0.07);
+
+      border: 1px solid var(--border-active);
+      border-radius: 13px;
+
+      color: var(--primary);
+
       font-weight: 850;
     }
 
-    .concept-card p {
-      margin-top: 0.55rem;
+    .lesson-card h3 {
+      margin-top: 20px;
+
+      font-size: 20px;
+    }
+
+    .lesson-card p {
+      margin-top: 10px;
+
       color: var(--muted);
+
+      line-height: 1.7;
     }
 
-    .list-card ul {
-      margin-top: 0.75rem;
-      color: var(--muted);
-    }
+    .back-button {
+      width: fit-content;
 
-    .action-bar {
-      position: sticky;
-      bottom: 1rem;
-      z-index: 20;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 1rem;
-      margin-top: 1.2rem;
-      padding: 0.85rem;
-      border: 1px solid var(--line);
-      border-radius: 16px;
-      background: color-mix(in srgb, var(--surface-solid) 90%, transparent);
-      box-shadow: var(--shadow-sm);
-      backdrop-filter: blur(16px);
-    }
+      margin-top: 20px;
+      padding: 13px 20px;
 
-    /* =========================================================
-       9. EXAM
-       ========================================================= */
-    .exam-toolbar {
-      position: sticky;
-      top: calc(var(--header-height) + 0.8rem);
-      z-index: 25;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 1rem;
-      padding: 1rem 1.1rem;
-      border: 1px solid var(--line);
-      border-radius: 16px;
-      background: color-mix(in srgb, var(--surface-solid) 90%, transparent);
-      box-shadow: var(--shadow-sm);
-      backdrop-filter: blur(18px);
-    }
+      border: 1px solid var(--border);
+      border-radius: 14px;
 
-    .exam-progress {
-      min-width: 170px;
-    }
+      color: var(--text);
+      background: var(--card);
 
-    .exam-progress-head {
-      display: flex;
-      justify-content: space-between;
-      gap: 0.8rem;
-      color: var(--muted);
-      font-size: 0.8rem;
-      font-weight: 700;
-    }
+      font-weight: 750;
 
-    .mini-track {
-      height: 6px;
-      margin-top: 0.42rem;
-      overflow: hidden;
-      border-radius: 999px;
-      background: var(--surface-2);
-    }
-
-    .mini-bar {
-      width: 0;
-      height: 100%;
-      border-radius: inherit;
-      background: linear-gradient(90deg, var(--brand), var(--brand-2));
-      transition: width 0.25s ease;
-    }
-
-    .question-card {
-      scroll-margin-top: calc(var(--header-height) + 100px);
-    }
-
-    .question-meta {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 0.8rem;
-      margin-bottom: 0.8rem;
-    }
-
-    .question-number {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.45rem;
-      color: var(--brand);
-      font-size: 0.82rem;
-      font-weight: 800;
-    }
-
-    .question-text {
-      font-size: 1.02rem;
-      font-weight: 700;
-    }
-
-    .options {
-      display: grid;
-      gap: 0.65rem;
-      margin-top: 1rem;
-    }
-
-    .option {
-      position: relative;
-      display: flex;
-      align-items: flex-start;
-      gap: 0.75rem;
-      padding: 0.85rem 0.9rem;
-      border: 1px solid var(--line);
-      border-radius: 13px;
-      color: var(--muted);
-      background: color-mix(in srgb, var(--surface-solid) 58%, transparent);
       cursor: pointer;
-      transition: 0.2s ease;
     }
 
-    .option:hover {
-      color: var(--text);
-      border-color: var(--line-strong);
-      transform: translateY(-1px);
-    }
-
-    .option:has(input:checked) {
-      color: var(--text);
-      border-color: var(--brand-2);
-      background: rgba(56, 189, 248, 0.08);
-      box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.07);
-    }
-
-    .option input {
-      width: 18px;
-      height: 18px;
-      margin-top: 0.15rem;
-      accent-color: var(--brand-2);
-      flex: 0 0 auto;
-    }
-
-    /* =========================================================
-       10. RESULTS
-       ========================================================= */
-    .result-summary {
-      display: grid;
-      grid-template-columns: 190px 1fr;
-      gap: 1.25rem;
-      align-items: center;
-    }
-
-    .score-ring {
-      --score-value: 0;
-      position: relative;
-      width: 168px;
-      height: 168px;
-      display: grid;
-      place-items: center;
-      margin-inline: auto;
-      border-radius: 999px;
-      background:
-        radial-gradient(circle, var(--surface-solid) 62%, transparent 63%),
-        conic-gradient(var(--brand) calc(var(--score-value) * 1%), var(--surface-2) 0);
-      box-shadow: inset 0 0 0 1px var(--line);
-    }
-
-    .score-ring strong {
-      font-size: 2.15rem;
-      line-height: 1;
-    }
-
-    .score-ring span {
-      display: block;
-      margin-top: 0.25rem;
-      color: var(--muted);
-      font-size: 0.72rem;
-      font-weight: 750;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-    }
-
-    .result-message h2 {
-      margin-top: 0.75rem;
-    }
-
-    .result-message p {
-      margin-top: 0.55rem;
-      color: var(--muted);
-    }
-
-    .answer-card {
-      border-left: 4px solid var(--line);
-    }
-
-    .answer-card.correct {
-      border-left-color: var(--good);
-    }
-
-    .answer-card.wrong {
-      border-left-color: var(--bad);
-    }
-
-    .answer-state {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.4rem;
-      margin-top: 0.8rem;
-      font-size: 0.9rem;
-      font-weight: 750;
-    }
-
-    .answer-state.good {
-      color: var(--good);
-    }
-
-    .answer-state.bad {
-      color: var(--bad);
-    }
-
-    .weak-list {
-      display: grid;
-      gap: 0.65rem;
-      margin-top: 1rem;
-    }
-
-    .weak-item {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 1rem;
-      padding: 0.8rem;
-      border: 1px solid var(--line);
-      border-radius: 13px;
-      background: var(--surface-2);
-    }
-
-    /* =========================================================
-       11. RECALL / EMPTY STATE
-       ========================================================= */
-    .empty-state {
-      min-height: 330px;
-      display: grid;
-      place-items: center;
-      text-align: center;
-    }
-
-    .empty-state-icon {
-      width: 70px;
-      height: 70px;
-      display: grid;
-      place-items: center;
-      margin-inline: auto;
-      border: 1px solid var(--line-strong);
-      border-radius: 22px;
-      color: var(--brand);
-      background: rgba(94, 234, 212, 0.07);
-    }
-
-    .empty-state-icon svg {
-      width: 32px;
-      height: 32px;
-    }
-
-    .empty-state h2 {
-      margin-top: 1rem;
-    }
-
-    .empty-state p {
-      max-width: 46ch;
-      margin: 0.65rem auto 0;
-      color: var(--muted);
-    }
-
-    .recall-card h3 {
-      margin-top: 0.7rem;
-    }
-
-    .recall-question {
-      margin-top: 0.9rem;
-      padding: 0.85rem;
-      border: 1px solid var(--line);
-      border-radius: 13px;
-      background: var(--surface-2);
-    }
-
-    .answer-reveal {
-      margin-top: 0.7rem;
-      padding: 0.8rem;
-      border: 1px solid rgba(52, 211, 153, 0.22);
-      border-radius: 12px;
-      background: rgba(52, 211, 153, 0.07);
-    }
-
-    .rating-row {
-      display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
-      gap: 0.55rem;
-      margin-top: 0.85rem;
-    }
-
-    /* =========================================================
-       12. TOAST / FOOTER / STATUS
-       ========================================================= */
-    .toast-stack {
-      position: fixed;
-      right: 1rem;
-      bottom: 1rem;
-      z-index: 100;
-      width: min(390px, calc(100% - 2rem));
-      display: grid;
-      gap: 0.65rem;
-      pointer-events: none;
-    }
+    /* =========================
+       TOAST
+    ========================== */
 
     .toast {
-      display: flex;
-      align-items: flex-start;
-      gap: 0.7rem;
-      padding: 0.85rem 0.95rem;
-      border: 1px solid var(--line);
-      border-radius: 14px;
+      position: fixed;
+      right: 20px;
+      bottom: 20px;
+
+      z-index: 120;
+
+      max-width: 380px;
+
+      display: none;
+
+      padding: 15px 18px;
+
+      border: 1px solid var(--border);
+      border-radius: 15px;
+
       color: var(--text);
-      background: color-mix(in srgb, var(--surface-solid) 94%, transparent);
-      box-shadow: var(--shadow-lg);
-      backdrop-filter: blur(18px);
-      animation: toast-in 0.28s ease both;
-      pointer-events: auto;
+      background: var(--card);
+
+      box-shadow: var(--shadow);
+    }
+
+    .toast.show {
+      display: block;
+
+      animation:
+        toastIn 0.25s ease;
     }
 
     .toast.error {
-      border-color: rgba(251, 113, 133, 0.34);
+      border-color:
+        rgba(251, 113, 133, 0.45);
     }
 
     .toast.success {
-      border-color: rgba(52, 211, 153, 0.34);
+      border-color:
+        rgba(52, 211, 153, 0.45);
     }
 
-    .toast-icon {
-      flex: 0 0 auto;
-      width: 24px;
-      height: 24px;
-      display: grid;
-      place-items: center;
-      border-radius: 8px;
-      color: var(--brand);
-      background: rgba(94, 234, 212, 0.08);
-      font-size: 0.8rem;
-      font-weight: 900;
-    }
-
-    .toast.error .toast-icon {
-      color: var(--bad);
-      background: rgba(251, 113, 133, 0.08);
-    }
-
-    .toast.success .toast-icon {
-      color: var(--good);
-      background: rgba(52, 211, 153, 0.08);
-    }
-
-    .server-status {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.45rem;
-      color: var(--muted);
-      font-size: 0.78rem;
-      font-weight: 700;
-    }
-
-    .status-dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 999px;
-      background: var(--warn);
-      box-shadow: 0 0 12px color-mix(in srgb, var(--warn) 65%, transparent);
-    }
-
-    .server-status.online .status-dot {
-      background: var(--good);
-      box-shadow: 0 0 12px color-mix(in srgb, var(--good) 65%, transparent);
-    }
-
-    .server-status.offline .status-dot {
-      background: var(--bad);
-      box-shadow: 0 0 12px color-mix(in srgb, var(--bad) 65%, transparent);
-    }
-
-    footer {
-      width: min(var(--container), calc(100% - 32px));
-      margin: 0 auto 2rem;
-      padding-top: 1.4rem;
-      border-top: 1px solid var(--line);
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 1rem;
-      color: var(--muted);
-      font-size: 0.82rem;
-    }
-
-    /* =========================================================
-       13. ANIMATIONS / RESPONSIVE
-       ========================================================= */
-    @keyframes fade-up {
-      from {
-        opacity: 0;
-        transform: translateY(10px);
-      }
-      to {
-        opacity: 1;
-        transform: translateY(0);
-      }
-    }
+    /* =========================
+       ANIMATIONS
+    ========================== */
 
     @keyframes spin {
       to {
@@ -1421,148 +1116,123 @@
       }
     }
 
-    @keyframes core-pulse {
+    @keyframes pulse {
       0%,
       100% {
-        transform: scale(0.96);
+        transform: scale(0.95);
       }
+
       50% {
-        transform: scale(1.04);
+        transform: scale(1.05);
       }
     }
 
-    @keyframes loading-bar {
+    @keyframes loadingProgress {
       0% {
-        transform: translateX(-105%);
+        transform: translateX(-120%);
       }
-      55% {
-        transform: translateX(115%);
+
+      60% {
+        transform: translateX(130%);
       }
+
       100% {
-        transform: translateX(245%);
+        transform: translateX(250%);
       }
     }
 
-    @keyframes toast-in {
+    @keyframes toastIn {
       from {
         opacity: 0;
-        transform: translateY(10px) scale(0.98);
+        transform: translateY(10px);
       }
+
       to {
         opacity: 1;
-        transform: translateY(0) scale(1);
+        transform: translateY(0);
       }
     }
 
-    @media (max-width: 900px) {
+    /* =========================
+       RESPONSIVE
+    ========================== */
+
+    @media (max-width: 1050px) {
       .hero {
         grid-template-columns: 1fr;
       }
 
-      .hero-copy {
-        min-height: 430px;
-      }
-
-      .grid.three {
-        grid-template-columns: 1fr;
+      .hero-left {
+        min-height: auto;
       }
     }
 
     @media (max-width: 720px) {
-      :root {
-        --header-height: 68px;
+      .navbar {
+        width: min(100% - 22px, 1460px);
       }
 
-      .brand-copy small,
-      .server-status {
+      main {
+        width: min(100% - 22px, 1460px);
+      }
+
+      .brand-subtitle,
+      .assistant-status {
         display: none;
       }
 
       .nav-button {
-        padding-inline: 0.65rem;
-        font-size: 0.88rem;
+        padding: 0 12px;
+
+        font-size: 13px;
       }
 
-      main {
-        width: min(100% - 22px, var(--container));
-        padding-top: 1rem;
+      .hero-left,
+      .hero-right {
+        border-radius: 24px;
       }
 
-      .grid.two,
-      .result-summary {
+      .hero-left {
+        padding: 35px 25px;
+      }
+
+      .hero-heading {
+        font-size: 56px;
+      }
+
+      .hero-description {
+        font-size: 16px;
+      }
+
+      .hero-right {
+        padding: 14px;
+      }
+
+      .study-card {
+        padding: 20px;
+      }
+
+      .lesson-grid {
         grid-template-columns: 1fr;
-      }
-
-      .hero-copy {
-        min-height: auto;
-        padding: 1.45rem;
-      }
-
-      .hero h1 {
-        max-width: 11ch;
-      }
-
-      .hero-panel {
-        padding: 0.8rem;
-      }
-
-      .section-heading {
-        display: grid;
-      }
-
-      .action-bar,
-      .exam-toolbar {
-        align-items: stretch;
-        flex-direction: column;
-      }
-
-      .action-bar .btn,
-      .exam-toolbar .btn {
-        width: 100%;
-      }
-
-      .exam-progress {
-        width: 100%;
-      }
-
-      .rating-row {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-      }
-
-      footer {
-        align-items: flex-start;
-        flex-direction: column;
       }
     }
 
-    @media (max-width: 440px) {
-      .brand-copy strong {
-        font-size: 0.9rem;
+    @media (max-width: 480px) {
+      .brand-title {
+        font-size: 16px;
       }
 
-      .brand-logo {
-        width: 38px;
-        height: 38px;
+      .brand-icon {
+        width: 42px;
+        height: 42px;
       }
 
-      .nav-button {
-        font-size: 0;
+      .nav-button.recall-button {
+        display: none;
       }
 
-      .nav-button::after {
-        font-size: 0.82rem;
-      }
-
-      .nav-button[data-label="home"]::after {
-        content: "Home";
-      }
-
-      .nav-button[data-label="recall"]::after {
-        content: "Recall";
-      }
-
-      .hero h1 {
-        font-size: 2.65rem;
+      .hero-heading {
+        font-size: 48px;
       }
     }
 
@@ -1570,7 +1240,6 @@
       *,
       *::before,
       *::after {
-        scroll-behavior: auto !important;
         animation-duration: 0.001ms !important;
         animation-iteration-count: 1 !important;
         transition-duration: 0.001ms !important;
@@ -1581,1304 +1250,1051 @@
 
 <body>
   <div class="background-grid"></div>
-  <div class="orb orb-one"></div>
-  <div class="orb orb-two"></div>
 
-  <header class="site-header">
-    <div class="header-inner">
-      <button class="brand-mark" type="button" onclick="go('home')" aria-label="Go to home">
-        <span class="brand-logo" aria-hidden="true">
-          <svg viewBox="0 0 24 24" fill="none">
-            <path d="M4 6.5 12 3l8 3.5-8 3.5-8-3.5Z" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/>
-            <path d="M7 8.2v5.1c0 1.2 2.2 2.7 5 2.7s5-1.5 5-2.7V8.2" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
-            <path d="M20 7v5" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
+  <!-- =========================
+       HEADER
+  ========================== -->
+
+  <header>
+    <nav class="navbar">
+      <div class="brand">
+        <div class="brand-icon">
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            aria-hidden="true"
+          >
+            <path
+              d="M4 6.5 12 3l8 3.5-8 3.5-8-3.5Z"
+              stroke="currentColor"
+              stroke-width="1.9"
+              stroke-linejoin="round"
+            />
+
+            <path
+              d="M7 8.2v5.1c0 1.2 2.2 2.7 5 2.7s5-1.5 5-2.7V8.2"
+              stroke="currentColor"
+              stroke-width="1.9"
+              stroke-linecap="round"
+            />
           </svg>
-        </span>
-        <span class="brand-copy">
-          <strong>Smart<span>Study</span> Assistant</strong>
-          <small>Adaptive learning platform</small>
-        </span>
-      </button>
+        </div>
 
-      <nav class="nav-actions" aria-label="Primary navigation">
-        <span id="serverStatus" class="server-status">
+        <div>
+          <div class="brand-title">
+            Smart<span>Study</span> Assistant
+          </div>
+
+          <div class="brand-subtitle">
+            Adaptive Learning Platform
+          </div>
+        </div>
+      </div>
+
+      <div class="nav-right">
+        <div
+          id="assistantStatus"
+          class="assistant-status"
+        >
           <span class="status-dot"></span>
-          <span>Checking API</span>
-        </span>
+          <span id="assistantStatusText">
+            Checking assistant
+          </span>
+        </div>
 
         <button
-          id="homeNav"
           class="nav-button active"
-          data-label="home"
           type="button"
-          onclick="go('home')"
+          onclick="showHome()"
         >
           Home
         </button>
 
         <button
-          id="recallNav"
-          class="nav-button"
-          data-label="recall"
+          class="nav-button recall-button"
           type="button"
-          onclick="loadRecall()"
+          onclick="showRecallMessage()"
         >
           Recall Due
         </button>
 
         <button
-          id="themeToggle"
-          class="icon-button"
+          id="themeButton"
+          class="theme-button"
           type="button"
-          aria-label="Toggle color theme"
-          title="Toggle theme"
+          aria-label="Change theme"
+          title="Change theme"
         >
-          <svg id="themeIcon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path d="M20.2 15.2A8 8 0 0 1 8.8 3.8 8.7 8.7 0 1 0 20.2 15.2Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
-          </svg>
+          <svg
+            id="themeIcon"
+            viewBox="0 0 24 24"
+            fill="none"
+          ></svg>
         </button>
-      </nav>
-    </div>
+      </div>
+    </nav>
   </header>
 
-  <main>
-    <!-- =======================================================
-         HOME
-         ======================================================= -->
-    <section id="home" class="section">
-      <div class="hero">
-        <div class="hero-copy">
-          <span class="eyebrow">
-            <span>✦</span>
-            AI-powered active learning
-          </span>
+  <!-- =========================
+       MAIN
+  ========================== -->
 
-          <h1>
+  <main>
+    <section id="homeSection">
+      <div class="hero">
+
+        <!-- LEFT -->
+
+        <div class="hero-left">
+          <div class="eyebrow">
+            <span>✦</span>
+            AI-Powered Active Learning
+          </div>
+
+          <h1 class="hero-heading">
             Learn deeply.
-            <span class="gradient-text">Remember longer.</span>
+
+            <span class="gradient-text">
+              Remember longer.
+            </span>
           </h1>
 
           <p class="hero-description">
-            Turn any topic or PDF into a clear lesson, a personalized assessment,
-            a weak-concept diagnosis, targeted re-teaching, and spaced-recall reviews.
+            Turn any topic or PDF into a clear lesson,
+            a personalized assessment, a weak-concept
+            diagnosis, targeted re-teaching, and
+            spaced-recall reviews.
           </p>
 
-          <div class="hero-badges">
-            <span class="feature-chip"><span>✓</span> Topic or PDF</span>
-            <span class="feature-chip"><span>✓</span> Smart assessment</span>
-            <span class="feature-chip"><span>✓</span> Weak-area diagnosis</span>
-            <span class="feature-chip"><span>✓</span> Spaced recall</span>
+          <div class="feature-list">
+            <span class="feature">
+              <span class="feature-check">✓</span>
+              Topic or PDF
+            </span>
+
+            <span class="feature">
+              <span class="feature-check">✓</span>
+              Smart assessment
+            </span>
+
+            <span class="feature">
+              <span class="feature-check">✓</span>
+              Weak-area diagnosis
+            </span>
+
+            <span class="feature">
+              <span class="feature-check">✓</span>
+              Spaced recall
+            </span>
           </div>
         </div>
 
-        <div class="hero-panel">
-          <div class="study-card">
-            <h3>
-              <span aria-hidden="true">
-                <svg viewBox="0 0 24 24" fill="none">
-                  <path d="M5 4.5h10.5A2.5 2.5 0 0 1 18 7v12H7.5A2.5 2.5 0 0 1 5 16.5v-12Z" stroke="currentColor" stroke-width="1.8"/>
-                  <path d="M7.5 19A2.5 2.5 0 0 1 5 16.5 2.5 2.5 0 0 1 7.5 14H18" stroke="currentColor" stroke-width="1.8"/>
-                </svg>
-              </span>
-              Study a topic
-            </h3>
+        <!-- RIGHT -->
 
-            <p class="muted small">
-              Type a subject, chapter, theory, formula, or concept.
+        <div class="hero-right">
+
+          <!-- TOPIC CARD -->
+
+          <div class="study-card">
+            <div class="card-heading">
+              <div class="card-icon">
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                >
+                  <path
+                    d="M5 4.5h10.5A2.5 2.5 0 0 1 18 7v12H7.5A2.5 2.5 0 0 1 5 16.5v-12Z"
+                    stroke="currentColor"
+                    stroke-width="1.8"
+                  />
+
+                  <path
+                    d="M7.5 19A2.5 2.5 0 0 1 5 16.5 2.5 2.5 0 0 1 7.5 14H18"
+                    stroke="currentColor"
+                    stroke-width="1.8"
+                  />
+                </svg>
+              </div>
+
+              <h2 class="card-title">
+                Study a topic
+              </h2>
+            </div>
+
+            <p class="card-description">
+              Type a subject, chapter, theory,
+              formula, or concept.
             </p>
 
-            <label class="input-label" for="topicInput" style="margin-top: 0.9rem">
+            <label for="topicInput">
               Topic name
             </label>
 
-            <div class="input-shell">
-              <input
-                id="topicInput"
-                type="text"
-                autocomplete="off"
-                placeholder="e.g. Operating System Deadlock"
-                maxlength="240"
-              />
+            <!-- Blue arrow button removed -->
+
+            <input
+              id="topicInput"
+              class="topic-input"
+              type="text"
+              autocomplete="off"
+              maxlength="240"
+              placeholder="e.g. Operating System Deadlock"
+            />
+
+            <div class="suggestions">
               <button
-                id="topicArrowButton"
-                class="input-action"
+                class="suggestion-button"
                 type="button"
-                onclick="startTopic()"
-                aria-label="Generate lesson"
-                title="Generate lesson"
+                onclick="selectTopic('Database Normalization')"
               >
-                <svg viewBox="0 0 24 24" fill="none">
-                  <path d="M5 12h14M14 7l5 5-5 5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                </svg>
+                Database Normalization
+              </button>
+
+              <button
+                class="suggestion-button"
+                type="button"
+                onclick="selectTopic('Fourier Series')"
+              >
+                Fourier Series
+              </button>
+
+              <button
+                class="suggestion-button"
+                type="button"
+                onclick="selectTopic('Java Inheritance')"
+              >
+                Java Inheritance
               </button>
             </div>
 
-            <div class="topic-suggestions" aria-label="Suggested topics">
-              <button class="suggestion" type="button" onclick="useSuggestion('Database Normalization')">Database Normalization</button>
-              <button class="suggestion" type="button" onclick="useSuggestion('Fourier Series')">Fourier Series</button>
-              <button class="suggestion" type="button" onclick="useSuggestion('Java Inheritance')">Java Inheritance</button>
-            </div>
-
-            <button id="topicButton" class="btn full" type="button" onclick="startTopic()" style="margin-top: 0.95rem">
-              <svg viewBox="0 0 24 24" fill="none">
-                <path d="M12 3v18M3 12h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-              </svg>
-              Generate my lesson
+            <button
+              id="generateButton"
+              class="primary-button"
+              type="button"
+              onclick="generateLesson()"
+            >
+              + &nbsp; Generate my lesson
             </button>
           </div>
 
-          <div class="study-card">
-            <h3>
-              <span aria-hidden="true">
-                <svg viewBox="0 0 24 24" fill="none">
-                  <path d="M7 3h7l4 4v14H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z" stroke="currentColor" stroke-width="1.8"/>
-                  <path d="M14 3v5h5M9 13h6M9 17h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
-                </svg>
-              </span>
-              Study from a PDF
-            </h3>
+          <!-- PDF CARD -->
 
-            <p class="muted small">
-              Upload a text-based PDF and SSA will turn it into a learning session.
+          <div class="study-card">
+            <div class="card-heading">
+              <div class="card-icon">
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                >
+                  <path
+                    d="M7 3h7l4 4v14H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z"
+                    stroke="currentColor"
+                    stroke-width="1.8"
+                  />
+
+                  <path
+                    d="M14 3v5h5M9 13h6M9 17h4"
+                    stroke="currentColor"
+                    stroke-width="1.8"
+                    stroke-linecap="round"
+                  />
+                </svg>
+              </div>
+
+              <h2 class="card-title">
+                Study from a PDF
+              </h2>
+            </div>
+
+            <p class="card-description">
+              Upload a text-based PDF and SSA will
+              turn it into a learning session.
             </p>
 
-            <label id="uploadZone" class="upload-zone" for="pdfInput">
-              <input type="file" id="pdfInput" accept="application/pdf,.pdf" />
-              <span>
-                <span class="upload-icon" aria-hidden="true">
-                  <svg viewBox="0 0 24 24" fill="none">
-                    <path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
-                    <path d="M5 14v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
+            <label
+              id="uploadBox"
+              class="upload-box"
+              for="pdfInput"
+            >
+              <input
+                id="pdfInput"
+                type="file"
+                accept=".pdf,application/pdf"
+              />
+
+              <div>
+                <div class="upload-icon">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                  >
+                    <path
+                      d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5"
+                      stroke="currentColor"
+                      stroke-width="1.9"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    />
+
+                    <path
+                      d="M5 14v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4"
+                      stroke="currentColor"
+                      stroke-width="1.9"
+                      stroke-linecap="round"
+                    />
                   </svg>
-                </span>
-                <strong>Drop your PDF here</strong>
-                <span class="muted small" style="display:block; margin-top:0.2rem">
+                </div>
+
+                <div class="upload-title">
+                  Drop your PDF here
+                </div>
+
+                <div class="upload-subtitle">
                   or click to browse
-                </span>
-                <span id="fileName" class="file-name">No file selected</span>
-              </span>
+                </div>
+
+                <div
+                  id="fileName"
+                  class="file-name"
+                >
+                  No file selected
+                </div>
+              </div>
             </label>
 
-            <button id="pdfButton" class="btn secondary full" type="button" onclick="startPdf()" style="margin-top: 0.85rem">
+            <button
+              id="pdfButton"
+              class="secondary-button"
+              type="button"
+              onclick="studyPdf()"
+            >
               Study from selected PDF
             </button>
           </div>
         </div>
       </div>
-
-      <div class="workflow">
-        <div class="section-heading">
-          <div>
-            <span class="eyebrow">How SSA works</span>
-            <h2 style="margin-top:0.75rem">A complete adaptive learning loop</h2>
-          </div>
-          <p>
-            The system does not stop after explanation. It checks understanding,
-            finds weak areas, re-teaches them, and schedules revision.
-          </p>
-        </div>
-
-        <div class="grid three">
-          <article class="card workflow-card">
-            <span class="workflow-number">01 — LEARN</span>
-            <div>
-              <h3>Structured explanation</h3>
-              <p>Understand the topic through key concepts, examples, common mistakes, and a clear summary.</p>
-            </div>
-          </article>
-
-          <article class="card workflow-card">
-            <span class="workflow-number">02 — DIAGNOSE</span>
-            <div>
-              <h3>Assessment and weak areas</h3>
-              <p>Take an AI-generated exam and identify the exact sub-concepts that need more attention.</p>
-            </div>
-          </article>
-
-          <article class="card workflow-card">
-            <span class="workflow-number">03 — RETAIN</span>
-            <div>
-              <h3>Re-teach and recall</h3>
-              <p>Relearn only what you missed, then review it later using spaced-recall scheduling.</p>
-            </div>
-          </article>
-        </div>
-      </div>
     </section>
 
-    <!-- Dynamic application sections -->
-    <section id="learn" class="section hidden"></section>
-    <section id="exam" class="section hidden"></section>
-    <section id="results" class="section hidden"></section>
-    <section id="reteach" class="section hidden"></section>
-    <section id="recall" class="section hidden"></section>
+    <!-- HOW SSA WORKS REMOVED -->
+
+    <!-- LESSON SECTION -->
+
+    <section
+      id="lessonSection"
+      class="lesson-section"
+    ></section>
   </main>
 
-  <footer>
-    <span>© <span id="year"></span> SmartStudy Assistant</span>
-    <span>Learn → Assess → Diagnose → Re-teach → Recall</span>
-  </footer>
+  <!-- =========================
+       LOADING
+  ========================== -->
 
-  <div id="toastStack" class="toast-stack" aria-live="polite" aria-atomic="true"></div>
+  <div
+    id="loadingOverlay"
+    class="loading-overlay"
+  >
+    <div class="loading-card">
+      <div class="loader-visual">
+        <div class="loader-ring"></div>
+        <div class="loader-ring second"></div>
+
+        <div class="loader-core">
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+          >
+            <path
+              d="M9.5 4.5A3.5 3.5 0 0 0 6 8v1a3 3 0 0 0-1 5.83V16a4 4 0 0 0 4 4h1V4.5h-.5ZM14.5 4.5A3.5 3.5 0 0 1 18 8v1a3 3 0 0 1 1 5.83V16a4 4 0 0 1-4 4h-1V4.5h.5Z"
+              stroke="currentColor"
+              stroke-width="1.75"
+            />
+          </svg>
+        </div>
+      </div>
+
+      <h2
+        id="loadingTitle"
+        class="loading-title"
+      >
+        Creating your lesson
+      </h2>
+
+      <p
+        id="loadingMessage"
+        class="loading-message"
+      >
+        Understanding your topic...
+      </p>
+
+      <div class="progress-track">
+        <div class="progress-bar"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TOAST -->
+
+  <div
+    id="toast"
+    class="toast"
+  ></div>
 
   <script>
-    /* =========================================================
-       1. STATE AND API HELPERS
-       ========================================================= */
-    const API = "";
-    const SECTION_IDS = ["home", "learn", "exam", "results", "reteach", "recall"];
+    /* =========================
+       CONFIGURATION
+    ========================== */
 
-    let state = {
-      sessionId: null,
-      assessmentId: null,
-      loaderTimer: null,
-      selectedPdf: null,
-    };
+    const API_BASE_URL =
+      "http://localhost:5000";
 
-    async function readJsonSafely(response) {
-      const contentType = response.headers.get("content-type") || "";
+    let selectedPdf = null;
+    let loadingInterval = null;
 
-      if (contentType.includes("application/json")) {
-        return response.json();
+    /* =========================
+       THEME
+    ========================== */
+
+    const themeButton =
+      document.getElementById("themeButton");
+
+    const themeIcon =
+      document.getElementById("themeIcon");
+
+    function getSystemTheme() {
+      return window.matchMedia(
+        "(prefers-color-scheme: light)"
+      ).matches
+        ? "light"
+        : "dark";
+    }
+
+    function applyTheme(theme) {
+      document.body.classList.toggle(
+        "light",
+        theme === "light"
+      );
+
+      themeIcon.innerHTML =
+        theme === "light"
+          ? `
+            <circle
+              cx="12"
+              cy="12"
+              r="4"
+              stroke="currentColor"
+              stroke-width="1.8"
+            />
+
+            <path
+              d="
+                M12 2v2
+                M12 20v2
+                M4.93 4.93l1.42 1.42
+                M17.65 17.65l1.42 1.42
+                M2 12h2
+                M20 12h2
+                M4.93 19.07l1.42-1.42
+                M17.65 6.35l1.42-1.42
+              "
+              stroke="currentColor"
+              stroke-width="1.8"
+              stroke-linecap="round"
+            />
+          `
+          : `
+            <path
+              d="
+                M20.2 15.2
+                A8 8 0 0 1
+                8.8 3.8
+                A8.7 8.7 0 1 0
+                20.2 15.2Z
+              "
+              stroke="currentColor"
+              stroke-width="1.8"
+              stroke-linejoin="round"
+            />
+          `;
+    }
+
+    function initializeTheme() {
+      const savedTheme =
+        localStorage.getItem("ssa-theme");
+
+      const theme =
+        savedTheme || getSystemTheme();
+
+      applyTheme(theme);
+    }
+
+    themeButton.addEventListener(
+      "click",
+      function () {
+        const currentTheme =
+          document.body.classList.contains("light")
+            ? "light"
+            : "dark";
+
+        const nextTheme =
+          currentTheme === "dark"
+            ? "light"
+            : "dark";
+
+        localStorage.setItem(
+          "ssa-theme",
+          nextTheme
+        );
+
+        applyTheme(nextTheme);
       }
+    );
 
-      const text = await response.text();
-      return { error: text || "Unexpected server response" };
-    }
+    window
+      .matchMedia("(prefers-color-scheme: light)")
+      .addEventListener("change", function () {
+        const savedTheme =
+          localStorage.getItem("ssa-theme");
 
-    async function apiPost(path, body, options = {}) {
-      const controller = new AbortController();
-      const timeoutMs = options.timeoutMs || 180000;
-      const timeout = setTimeout(() => controller.abort(), timeoutMs);
-
-      try {
-        const response = await fetch(API + path, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-          signal: controller.signal,
-        });
-
-        const data = await readJsonSafely(response);
-
-        if (!response.ok) {
-          throw new Error(data.error || data.message || "Request failed");
+        if (!savedTheme) {
+          applyTheme(getSystemTheme());
         }
-
-        return data;
-      } catch (error) {
-        if (error.name === "AbortError") {
-          throw new Error("The request took too long. Please try again.");
-        }
-        throw error;
-      } finally {
-        clearTimeout(timeout);
-      }
-    }
-
-    async function apiGet(path, options = {}) {
-      const controller = new AbortController();
-      const timeoutMs = options.timeoutMs || 60000;
-      const timeout = setTimeout(() => controller.abort(), timeoutMs);
-
-      try {
-        const response = await fetch(API + path, {
-          signal: controller.signal,
-        });
-
-        const data = await readJsonSafely(response);
-
-        if (!response.ok) {
-          throw new Error(data.error || data.message || "Request failed");
-        }
-
-        return data;
-      } catch (error) {
-        if (error.name === "AbortError") {
-          throw new Error("The request took too long. Please try again.");
-        }
-        throw error;
-      } finally {
-        clearTimeout(timeout);
-      }
-    }
-
-    function esc(value) {
-      return String(value ?? "").replace(/[&<>"']/g, (character) => ({
-        "&": "&amp;",
-        "<": "&lt;",
-        ">": "&gt;",
-        '"': "&quot;",
-        "'": "&#039;",
-      })[character]);
-    }
-
-    /* =========================================================
-       2. NAVIGATION / THEME / GENERAL UI
-       ========================================================= */
-    function go(sectionId) {
-      stopLoading();
-
-      SECTION_IDS.forEach((id) => {
-        const section = document.getElementById(id);
-        section.classList.toggle("hidden", id !== sectionId);
       });
 
-      document.getElementById("homeNav").classList.toggle("active", sectionId === "home");
-      document.getElementById("recallNav").classList.toggle("active", sectionId === "recall");
+    /* =========================
+       BACKEND STATUS
+    ========================== */
 
-      window.scrollTo({ top: 0, behavior: "smooth" });
-    }
+    async function checkAssistantStatus() {
+      const statusElement =
+        document.getElementById(
+          "assistantStatus"
+        );
 
-    function toast(message, type = "info", duration = 3200) {
-      const stack = document.getElementById("toastStack");
-      const element = document.createElement("div");
+      const statusText =
+        document.getElementById(
+          "assistantStatusText"
+        );
 
-      element.className = `toast ${type}`;
-      element.innerHTML = `
-        <span class="toast-icon">${type === "error" ? "!" : type === "success" ? "✓" : "i"}</span>
-        <div>
-          <strong>${type === "error" ? "Something went wrong" : type === "success" ? "Success" : "SmartStudy"}</strong>
-          <p class="muted small">${esc(message)}</p>
-        </div>
-      `;
+      try {
+        const response = await fetch(
+          `${API_BASE_URL}/api/health`
+        );
 
-      stack.appendChild(element);
-
-      setTimeout(() => {
-        element.style.opacity = "0";
-        element.style.transform = "translateY(8px)";
-        setTimeout(() => element.remove(), 220);
-      }, duration);
-    }
-
-    function setButtonBusy(button, isBusy, busyText = "Please wait...") {
-      if (!button) return;
-
-      if (isBusy) {
-        button.dataset.originalHtml = button.innerHTML;
-        button.disabled = true;
-        button.innerHTML = `<span class="button-spinner"></span>${esc(busyText)}`;
-      } else {
-        button.disabled = false;
-        if (button.dataset.originalHtml) {
-          button.innerHTML = button.dataset.originalHtml;
-          delete button.dataset.originalHtml;
+        if (!response.ok) {
+          throw new Error(
+            "Assistant connection failed"
+          );
         }
+
+        const data = await response.json();
+
+        statusElement.classList.remove(
+          "offline"
+        );
+
+        statusElement.classList.add(
+          "online"
+        );
+
+        statusText.textContent =
+          "Assistant online";
+      } catch (error) {
+        console.error(error);
+
+        statusElement.classList.remove(
+          "online"
+        );
+
+        statusElement.classList.add(
+          "offline"
+        );
+
+        statusText.textContent =
+          "Assistant offline";
       }
     }
 
-    function setTheme(theme) {
-      const useLight = theme === "light";
-      document.body.classList.toggle("light", useLight);
-      localStorage.setItem("ssa-theme", useLight ? "light" : "dark");
+    /* =========================
+       TOPIC
+    ========================== */
 
-      document.getElementById("themeIcon").innerHTML = useLight
-        ? `<circle cx="12" cy="12" r="4" stroke="currentColor" stroke-width="1.8"/>
-           <path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42M17.65 17.65l1.42 1.42M2 12h2M20 12h2M4.93 19.07l1.42-1.42M17.65 6.35l1.42-1.42" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>`
-        : `<path d="M20.2 15.2A8 8 0 0 1 8.8 3.8 8.7 8.7 0 1 0 20.2 15.2Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>`;
-    }
+    function selectTopic(topic) {
+      const input =
+        document.getElementById("topicInput");
 
-    function useSuggestion(topic) {
-      const input = document.getElementById("topicInput");
       input.value = topic;
       input.focus();
     }
 
-    /* =========================================================
-       3. PREMIUM LOADING INTERFACE
-       ========================================================= */
-    function stopLoading() {
-      if (state.loaderTimer) {
-        clearInterval(state.loaderTimer);
-        state.loaderTimer = null;
-      }
-    }
+    async function generateLesson() {
+      const topicInput =
+        document.getElementById("topicInput");
 
-    function loading(sectionId, title, steps = []) {
-      stopLoading();
-
-      const messages = steps.length
-        ? steps
-        : [
-            "Preparing your study session...",
-            "Organizing the key concepts...",
-            "Building a clear learning path...",
-          ];
-
-      const section = document.getElementById(sectionId);
-
-      section.innerHTML = `
-        <div class="loader-wrap">
-          <div class="loader-card">
-            <div class="loader-visual" aria-hidden="true">
-              <div class="orbit"></div>
-              <div class="orbit two"></div>
-              <div class="loader-core">
-                <svg viewBox="0 0 24 24" fill="none">
-                  <path d="M9.5 4.5A3.5 3.5 0 0 0 6 8v1a3 3 0 0 0-1 5.83V16a4 4 0 0 0 4 4h1V4.5h-.5ZM14.5 4.5A3.5 3.5 0 0 1 18 8v1a3 3 0 0 1 1 5.83V16a4 4 0 0 1-4 4h-1V4.5h.5Z" stroke="currentColor" stroke-width="1.75" stroke-linejoin="round"/>
-                  <path d="M7 10h3M14 10h3M7 15h3M14 15h3" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/>
-                </svg>
-              </div>
-            </div>
-
-            <h2>${esc(title)}</h2>
-            <p id="${sectionId}LoaderStep" class="loader-step">${esc(messages[0])}</p>
-
-            <div class="progress-track" aria-hidden="true">
-              <div class="progress-bar"></div>
-            </div>
-
-            <p class="loader-note">
-              AI generation can take a little time. Please keep this page open.
-            </p>
-          </div>
-        </div>
-      `;
-
-      go(sectionId);
-
-      let index = 0;
-      state.loaderTimer = setInterval(() => {
-        index = (index + 1) % messages.length;
-        const stepElement = document.getElementById(`${sectionId}LoaderStep`);
-        if (stepElement) {
-          stepElement.textContent = messages[index];
-        }
-      }, 1800);
-    }
-
-    /* =========================================================
-       4. START STUDY SESSION
-       ========================================================= */
-    async function startTopic() {
-      const topicInput = document.getElementById("topicInput");
-      const topic = topicInput.value.trim();
+      const topic =
+        topicInput.value.trim();
 
       if (!topic) {
-        toast("Enter a topic first.", "error");
-        topicInput.focus();
-        return;
-      }
-
-      const button = document.getElementById("topicButton");
-      setButtonBusy(button, true, "Starting lesson...");
-
-      loading("learn", "Creating your study session", [
-        `Understanding “${topic}”...`,
-        "Preparing the lesson structure...",
-        "Connecting to the AI tutor...",
-      ]);
-
-      try {
-        const data = await apiPost("/api/session/topic", { topic });
-        state.sessionId = data.sessionId;
-        await loadLesson();
-      } catch (error) {
-        toast(error.message, "error");
-        go("home");
-      } finally {
-        setButtonBusy(button, false);
-      }
-    }
-
-    async function startPdf() {
-      const fileInput = document.getElementById("pdfInput");
-      const file = state.selectedPdf || fileInput.files[0];
-
-      if (!file) {
-        toast("Choose a PDF first.", "error");
-        return;
-      }
-
-      if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
-        toast("Only PDF files are supported.", "error");
-        return;
-      }
-
-      if (file.size > 20 * 1024 * 1024) {
-        toast("Please choose a PDF smaller than 20 MB.", "error");
-        return;
-      }
-
-      const button = document.getElementById("pdfButton");
-      setButtonBusy(button, true, "Uploading PDF...");
-
-      loading("learn", "Reading your PDF", [
-        "Uploading the document securely...",
-        "Extracting readable text...",
-        "Finding the main ideas...",
-        "Preparing your personalized lesson...",
-      ]);
-
-      try {
-        const formData = new FormData();
-        formData.append("pdf", file);
-
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 180000);
-
-        const response = await fetch(API + "/api/session/pdf", {
-          method: "POST",
-          body: formData,
-          signal: controller.signal,
-        });
-
-        clearTimeout(timeout);
-
-        const data = await readJsonSafely(response);
-
-        if (!response.ok) {
-          throw new Error(data.error || data.message || "Upload failed");
-        }
-
-        state.sessionId = data.sessionId;
-        await loadLesson();
-      } catch (error) {
-        const message = error.name === "AbortError"
-          ? "The PDF upload took too long. Please try again."
-          : error.message;
-
-        toast(message, "error");
-        go("home");
-      } finally {
-        setButtonBusy(button, false);
-      }
-    }
-
-    /* =========================================================
-       5. LESSON
-       ========================================================= */
-    async function loadLesson() {
-      loading("learn", "Generating your explanation", [
-        "Mapping the core concepts...",
-        "Writing a clear overview...",
-        "Adding useful examples...",
-        "Checking common mistakes...",
-        "Preparing your summary...",
-      ]);
-
-      try {
-        const data = await apiPost("/api/explanation", {
-          sessionId: state.sessionId,
-        });
-
-        stopLoading();
-
-        const explanation = data.explanation || {};
-        const keyConcepts = explanation.keyConcepts || [];
-        const examples = explanation.examples || [];
-        const mistakes = explanation.commonMistakes || [];
-
-        document.getElementById("learn").innerHTML = `
-          <div class="page-stack">
-            <article class="page-hero">
-              <span class="eyebrow">Your AI lesson</span>
-              <h2>${esc(explanation.title || "Generated lesson")}</h2>
-              <p>${esc(explanation.overview || "Your explanation is ready.")}</p>
-            </article>
-
-            ${keyConcepts.length ? `
-              <div class="grid two">
-                ${keyConcepts.map((concept, index) => `
-                  <article class="card concept-card">
-                    <span class="concept-icon">${String(index + 1).padStart(2, "0")}</span>
-                    <h3>${esc(concept.name)}</h3>
-                    <p>${esc(concept.explanation)}</p>
-                  </article>
-                `).join("")}
-              </div>
-            ` : ""}
-
-            <div class="grid two">
-              ${examples.length ? `
-                <article class="card list-card">
-                  <span class="eyebrow">Examples</span>
-                  <h3 style="margin-top:0.75rem">See the ideas in action</h3>
-                  <ul>
-                    ${examples.map((item) => `<li>${esc(item)}</li>`).join("")}
-                  </ul>
-                </article>
-              ` : ""}
-
-              ${mistakes.length ? `
-                <article class="card list-card">
-                  <span class="eyebrow">Common mistakes</span>
-                  <h3 style="margin-top:0.75rem">What learners often confuse</h3>
-                  <ul>
-                    ${mistakes.map((item) => `<li>${esc(item)}</li>`).join("")}
-                  </ul>
-                </article>
-              ` : ""}
-            </div>
-
-            <article class="card">
-              <span class="eyebrow">Quick summary</span>
-              <h3 style="margin-top:0.75rem">What you should remember</h3>
-              <p class="muted" style="margin-top:0.55rem">${esc(explanation.summary || "")}</p>
-            </article>
-
-            <div class="action-bar">
-              <div>
-                <strong>Ready to test your understanding?</strong>
-                <p class="muted small">SSA will diagnose your weak sub-concepts.</p>
-              </div>
-              <button class="btn" type="button" onclick="loadExam()">
-                Take the exam
-                <svg viewBox="0 0 24 24" fill="none">
-                  <path d="M5 12h14M14 7l5 5-5 5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                </svg>
-              </button>
-            </div>
-          </div>
-        `;
-
-        go("learn");
-      } catch (error) {
-        toast(error.message, "error");
-        go("home");
-      }
-    }
-
-    /* =========================================================
-       6. EXAM
-       ========================================================= */
-    async function loadExam() {
-      loading("exam", "Building your personalized exam", [
-        "Selecting the most important concepts...",
-        "Creating MCQ questions...",
-        "Creating short-answer questions...",
-        "Balancing the difficulty...",
-        "Finalizing your assessment...",
-      ]);
-
-      try {
-        const data = await apiPost("/api/assessment", {
-          sessionId: state.sessionId,
-        });
-
-        stopLoading();
-
-        state.assessmentId = data.assessmentId;
-        const questions = data.questions || [];
-
-        document.getElementById("exam").innerHTML = `
-          <div class="page-stack">
-            <div class="exam-toolbar">
-              <div>
-                <strong>Adaptive assessment</strong>
-                <p class="muted small">${questions.length} question${questions.length === 1 ? "" : "s"} generated from your lesson.</p>
-              </div>
-
-              <div class="exam-progress">
-                <div class="exam-progress-head">
-                  <span>Answered</span>
-                  <span id="examProgressText">0 / ${questions.length}</span>
-                </div>
-                <div class="mini-track">
-                  <div id="examProgressBar" class="mini-bar"></div>
-                </div>
-              </div>
-            </div>
-
-            ${questions.map((question, index) => `
-              <article
-                class="card question-card"
-                data-question-id="${esc(question.id)}"
-                data-question-type="${esc(question.question_type)}"
-              >
-                <div class="question-meta">
-                  <span class="question-number">Question ${index + 1}</span>
-                  <span class="pill">${esc(question.question_type === "mcq" ? "MCQ" : "Short answer")}</span>
-                </div>
-
-                <p class="question-text">${esc(question.question_text)}</p>
-
-                ${question.question_type === "mcq"
-                  ? `
-                    <div class="options">
-                      ${(question.options || []).map((option, optionIndex) => `
-                        <label class="option">
-                          <input
-                            type="radio"
-                            name="${esc(question.id)}"
-                            value="${esc(option)}"
-                            onchange="updateExamProgress()"
-                          />
-                          <span><strong>${String.fromCharCode(65 + optionIndex)}.</strong> ${esc(option)}</span>
-                        </label>
-                      `).join("")}
-                    </div>
-                  `
-                  : `
-                    <textarea
-                      data-q="${esc(question.id)}"
-                      placeholder="Write your answer here..."
-                      oninput="updateExamProgress()"
-                    ></textarea>
-                  `
-                }
-              </article>
-            `).join("")}
-
-            <div class="action-bar">
-              <div>
-                <strong>Finished answering?</strong>
-                <p id="unansweredMessage" class="muted small">Answer all questions before submitting.</p>
-              </div>
-
-              <button id="submitExamButton" class="btn" type="button" onclick="submitExam()">
-                Submit answers
-                <svg viewBox="0 0 24 24" fill="none">
-                  <path d="m5 12 4 4L19 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                </svg>
-              </button>
-            </div>
-          </div>
-        `;
-
-        go("exam");
-        updateExamProgress();
-      } catch (error) {
-        toast(error.message, "error");
-        go("learn");
-      }
-    }
-
-    function isQuestionAnswered(card) {
-      const selectedRadio = card.querySelector('input[type="radio"]:checked');
-      const textarea = card.querySelector("textarea");
-
-      if (selectedRadio) return true;
-      if (textarea && textarea.value.trim()) return true;
-
-      return false;
-    }
-
-    function updateExamProgress() {
-      const cards = [...document.querySelectorAll("#exam .question-card")];
-      const answered = cards.filter(isQuestionAnswered).length;
-      const total = cards.length;
-      const percentage = total ? (answered / total) * 100 : 0;
-
-      const text = document.getElementById("examProgressText");
-      const bar = document.getElementById("examProgressBar");
-      const message = document.getElementById("unansweredMessage");
-
-      if (text) text.textContent = `${answered} / ${total}`;
-      if (bar) bar.style.width = `${percentage}%`;
-
-      if (message) {
-        const remaining = total - answered;
-        message.textContent = remaining
-          ? `${remaining} question${remaining === 1 ? "" : "s"} still unanswered.`
-          : "All questions answered. You can submit now.";
-      }
-    }
-
-    function collectAnswers() {
-      return [...document.querySelectorAll("#exam .question-card")].map((card) => {
-        const questionId = card.dataset.questionId;
-        const selectedRadio = card.querySelector('input[type="radio"]:checked');
-        const textarea = card.querySelector("textarea");
-
-        return {
-          questionId,
-          answer: selectedRadio
-            ? selectedRadio.value
-            : textarea
-              ? textarea.value.trim()
-              : "",
-        };
-      });
-    }
-
-    async function submitExam() {
-      const cards = [...document.querySelectorAll("#exam .question-card")];
-      const unansweredCount = cards.filter((card) => !isQuestionAnswered(card)).length;
-
-      if (unansweredCount > 0) {
-        const shouldContinue = window.confirm(
-          `${unansweredCount} question${unansweredCount === 1 ? " is" : "s are"} unanswered. Submit anyway?`
+        showToast(
+          "Please enter a topic first.",
+          "error"
         );
 
-        if (!shouldContinue) return;
+        topicInput.focus();
+
+        return;
       }
 
-      const answers = collectAnswers();
-      const button = document.getElementById("submitExamButton");
-      setButtonBusy(button, true, "Submitting...");
-
-      loading("results", "Analyzing your performance", [
-        "Checking your answers...",
-        "Comparing short answers with the rubric...",
-        "Mapping mistakes to sub-concepts...",
-        "Calculating your mastery score...",
-        "Preparing your personalized diagnosis...",
-      ]);
+      showLoading(
+        "Creating your lesson",
+        [
+          `Understanding “${topic}”...`,
+          "Organizing the important concepts...",
+          "Preparing a clear explanation...",
+          "Adding examples and common mistakes...",
+          "Finalizing your personalized lesson..."
+        ]
+      );
 
       try {
-        const data = await apiPost("/api/submit", {
-          assessmentId: state.assessmentId,
-          answers,
-        });
+        const sessionResponse = await fetch(
+          `${API_BASE_URL}/api/session/topic`,
+          {
+            method: "POST",
 
-        showResults(data);
+            headers: {
+              "Content-Type":
+                "application/json"
+            },
+
+            body: JSON.stringify({
+              topic: topic
+            })
+          }
+        );
+
+        const sessionData =
+          await sessionResponse.json();
+
+        if (!sessionResponse.ok) {
+          throw new Error(
+            sessionData.message ||
+            "Could not create study session"
+          );
+        }
+
+        const explanationResponse =
+          await fetch(
+            `${API_BASE_URL}/api/explanation`,
+            {
+              method: "POST",
+
+              headers: {
+                "Content-Type":
+                  "application/json"
+              },
+
+              body: JSON.stringify({
+                sessionId:
+                  sessionData.sessionId
+              })
+            }
+          );
+
+        const explanationData =
+          await explanationResponse.json();
+
+        if (!explanationResponse.ok) {
+          throw new Error(
+            explanationData.message ||
+            "Could not generate lesson"
+          );
+        }
+
+        hideLoading();
+
+        displayLesson(
+          explanationData.explanation
+        );
       } catch (error) {
-        toast(error.message, "error");
-        go("exam");
-      } finally {
-        setButtonBusy(button, false);
+        hideLoading();
+
+        showToast(
+          error.message,
+          "error"
+        );
       }
     }
 
-    /* =========================================================
-       7. RESULTS
-       ========================================================= */
-    function scoreMessage(score) {
-      if (score >= 85) {
-        return {
-          title: "Excellent understanding",
-          text: "You have a strong grasp of this topic. Review any small gaps and keep the concept active through recall.",
-        };
-      }
+    /* =========================
+       DISPLAY LESSON
+    ========================== */
 
-      if (score >= 65) {
-        return {
-          title: "Good progress",
-          text: "You understand the main ideas, but a few sub-concepts need targeted revision.",
-        };
-      }
-
-      if (score >= 40) {
-        return {
-          title: "You are building the foundation",
-          text: "Several concepts need clarification. The targeted re-teaching step will help you improve efficiently.",
-        };
-      }
-
-      return {
-        title: "Let’s rebuild the weak areas",
-        text: "This result is a diagnosis, not a failure. Focus on the identified concepts and try again after re-teaching.",
-      };
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
     }
 
-    function showResults(data) {
-      stopLoading();
+    function displayLesson(explanation) {
+      const homeSection =
+        document.getElementById(
+          "homeSection"
+        );
 
-      const weakConcepts = data.weakConcepts || [];
-      const graded = data.graded || [];
-      const score = Number(data.score || 0);
-      const message = scoreMessage(score);
+      const lessonSection =
+        document.getElementById(
+          "lessonSection"
+        );
 
-      document.getElementById("results").innerHTML = `
-        <div class="page-stack">
-          <article class="card result-summary">
-            <div class="score-ring" style="--score-value:${Math.max(0, Math.min(100, score))}">
-              <div>
-                <strong>${esc(score)}%</strong>
-                <span>Your score</span>
-              </div>
-            </div>
+      const keyConcepts =
+        explanation.keyConcepts || [];
 
-            <div class="result-message">
-              <span class="eyebrow">Assessment complete</span>
-              <h2>${esc(message.title)}</h2>
-              <p>${esc(message.text)}</p>
-            </div>
-          </article>
+      homeSection.style.display =
+        "none";
 
-          <div class="grid two">
-            ${graded.map((item, index) => `
-              <article class="card answer-card ${item.isCorrect ? "correct" : "wrong"}">
-                <span class="question-number">Question ${index + 1}</span>
-                <p class="question-text" style="margin-top:0.55rem">${esc(item.question)}</p>
-
-                <p class="muted small" style="margin-top:0.7rem">
-                  <strong>Your answer:</strong>
-                  ${item.studentAnswer ? esc(item.studentAnswer) : "<em>Blank</em>"}
-                </p>
-
-                <p class="answer-state ${item.isCorrect ? "good" : "bad"}">
-                  ${item.isCorrect ? "✓ Correct" : `✕ ${esc(item.feedback || "Needs improvement")}`}
-                </p>
-              </article>
-            `).join("")}
+      lessonSection.innerHTML = `
+        <div class="lesson-header">
+          <div class="eyebrow">
+            Your AI lesson
           </div>
 
-          <article class="card">
-            <div class="card-title-row">
-              <div>
-                <span class="eyebrow">Personalized diagnosis</span>
-                <h3 style="margin-top:0.75rem">Weak concepts detected</h3>
-              </div>
-              <span class="pill">${weakConcepts.length} identified</span>
-            </div>
+          <h2>
+            ${escapeHtml(
+              explanation.title ||
+              "Generated Lesson"
+            )}
+          </h2>
 
-            ${weakConcepts.length
-              ? `
-                <div class="weak-list">
-                  ${weakConcepts.map((concept) => `
-                    <div class="weak-item">
-                      <strong>${esc(concept.conceptTag)}</strong>
-                      <span class="pill sev-${esc(concept.severity)}">${esc(concept.severity)}</span>
-                    </div>
-                  `).join("")}
-                </div>
-              `
-              : `
-                <div class="empty-state" style="min-height:180px">
-                  <div>
-                    <div class="empty-state-icon" style="width:56px;height:56px;border-radius:17px">✓</div>
-                    <h3 style="margin-top:0.8rem">No weak concepts found</h3>
-                    <p>You performed very well. Use recall sessions to maintain your mastery.</p>
-                  </div>
-                </div>
-              `
-            }
-
-            <div class="row" style="margin-top:1rem">
-              ${weakConcepts.length
-                ? `<button class="btn" type="button" onclick="loadReteach()">Re-teach my weak areas</button>`
-                : `<button class="btn" type="button" onclick="loadRecall()">Open recall</button>`
-              }
-              <button class="btn secondary" type="button" onclick="resetAndGoHome()">Study something new</button>
-            </div>
-          </article>
+          <p>
+            ${escapeHtml(
+              explanation.overview || ""
+            )}
+          </p>
         </div>
+
+        <div class="lesson-grid">
+          ${keyConcepts
+            .map(
+              (concept, index) => `
+                <article class="lesson-card">
+                  <div class="lesson-number">
+                    ${String(index + 1)
+                      .padStart(2, "0")}
+                  </div>
+
+                  <h3>
+                    ${escapeHtml(
+                      concept.name
+                    )}
+                  </h3>
+
+                  <p>
+                    ${escapeHtml(
+                      concept.explanation
+                    )}
+                  </p>
+                </article>
+              `
+            )
+            .join("")}
+        </div>
+
+        <button
+          class="back-button"
+          type="button"
+          onclick="showHome()"
+        >
+          ← Back to home
+        </button>
       `;
 
-      go("results");
+      lessonSection.classList.add(
+        "show"
+      );
+
+      window.scrollTo({
+        top: 0,
+        behavior: "smooth"
+      });
     }
 
-    /* =========================================================
-       8. TARGETED RE-TEACHING
-       ========================================================= */
-    async function loadReteach() {
-      loading("reteach", "Building your targeted re-teaching plan", [
-        "Reading your diagnosis...",
-        "Prioritizing the weakest concepts...",
-        "Creating simpler explanations...",
-        "Adding corrective examples...",
-        "Scheduling spaced-recall reviews...",
-      ]);
+    function showHome() {
+      document.getElementById(
+        "homeSection"
+      ).style.display = "block";
 
-      try {
-        const data = await apiPost("/api/reteach", {
-          sessionId: state.sessionId,
-        });
+      document.getElementById(
+        "lessonSection"
+      ).classList.remove("show");
 
-        stopLoading();
-
-        const lessons = data.lessons || [];
-
-        document.getElementById("reteach").innerHTML = `
-          <div class="page-stack">
-            <article class="page-hero">
-              <span class="eyebrow">Targeted re-teaching</span>
-              <h2>Focus only on what needs improvement</h2>
-              <p>
-                These mini-lessons explain your weak concepts in a simpler way.
-                They are also scheduled for future spaced-recall review.
-              </p>
-            </article>
-
-            ${lessons.map((lesson, index) => `
-              <article class="card">
-                <div class="card-title-row">
-                  <div>
-                    <span class="concept-icon">${String(index + 1).padStart(2, "0")}</span>
-                    <h3>${esc(lesson.concept)}</h3>
-                  </div>
-                  <span class="pill">Weak-area lesson</span>
-                </div>
-
-                <div class="stack-md" style="margin-top:1rem">
-                  <div>
-                    <span class="muted small"><strong>Simple explanation</strong></span>
-                    <p style="margin-top:0.35rem">${esc(lesson.simpleExplanation)}</p>
-                  </div>
-
-                  <hr class="divider" />
-
-                  <div class="grid two">
-                    <div>
-                      <span class="muted small"><strong>Why it is confusing</strong></span>
-                      <p style="margin-top:0.35rem">${esc(lesson.whyConfusing)}</p>
-                    </div>
-
-                    <div>
-                      <span class="muted small"><strong>Correct understanding</strong></span>
-                      <p style="margin-top:0.35rem">${esc(lesson.correctUnderstanding)}</p>
-                    </div>
-                  </div>
-
-                  <div class="recall-question">
-                    <strong>Example</strong>
-                    <p class="muted" style="margin-top:0.35rem">${esc(lesson.example)}</p>
-                  </div>
-                </div>
-              </article>
-            `).join("")}
-
-            <div class="action-bar">
-              <div>
-                <strong>Continue the learning loop</strong>
-                <p class="muted small">Review due concepts through spaced recall.</p>
-              </div>
-
-              <div class="row">
-                <button class="btn secondary" type="button" onclick="resetAndGoHome()">New topic</button>
-                <button class="btn" type="button" onclick="loadRecall()">Go to recall</button>
-              </div>
-            </div>
-          </div>
-        `;
-
-        go("reteach");
-      } catch (error) {
-        toast(error.message, "error");
-        go("results");
-      }
+      window.scrollTo({
+        top: 0,
+        behavior: "smooth"
+      });
     }
 
-    /* =========================================================
-       9. SPACED RECALL
-       ========================================================= */
-    async function loadRecall() {
-      loading("recall", "Loading your recall queue", [
-        "Checking which concepts are due...",
-        "Sorting reviews by priority...",
-        "Preparing mini recall questions...",
-      ]);
+    function showRecallMessage() {
+      showToast(
+        "Recall feature will appear after weak concepts are scheduled.",
+        "success"
+      );
+    }
 
-      try {
-        const data = await apiGet("/api/recall/due");
-        stopLoading();
+    /* =========================
+       PDF
+    ========================== */
 
-        const items = data.due || [];
+    const pdfInput =
+      document.getElementById("pdfInput");
 
-        if (!items.length) {
-          document.getElementById("recall").innerHTML = `
-            <article class="card empty-state">
-              <div>
-                <div class="empty-state-icon" aria-hidden="true">
-                  <svg viewBox="0 0 24 24" fill="none">
-                    <path d="M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20Z" stroke="currentColor" stroke-width="1.8"/>
-                    <path d="m8 12 2.5 2.5L16.5 8.5" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
-                  </svg>
-                </div>
-                <h2>You are all caught up</h2>
-                <p>
-                  Nothing is due right now. New review items will appear here
-                  when the spaced-recall schedule says it is time.
-                </p>
-                <button class="btn" type="button" onclick="resetAndGoHome()" style="margin-top:1rem">
-                  Study a new topic
-                </button>
-              </div>
-            </article>
-          `;
+    const fileName =
+      document.getElementById("fileName");
 
-          go("recall");
+    const uploadBox =
+      document.getElementById("uploadBox");
+
+    pdfInput.addEventListener(
+      "change",
+      function () {
+        const file =
+          pdfInput.files[0];
+
+        if (!file) {
+          selectedPdf = null;
+
+          fileName.textContent =
+            "No file selected";
+
           return;
         }
 
-        document.getElementById("recall").innerHTML = `
-          <div class="page-stack">
-            <article class="page-hero">
-              <span class="eyebrow">Spaced recall</span>
-              <h2>${items.length} concept${items.length === 1 ? "" : "s"} due for review</h2>
-              <p>
-                Try to answer from memory before showing the answer.
-                Then rate how well you remembered it.
-              </p>
-            </article>
+        if (
+          file.type !== "application/pdf" &&
+          !file.name
+            .toLowerCase()
+            .endsWith(".pdf")
+        ) {
+          selectedPdf = null;
 
-            ${items.map((item) => {
-              const reteach = item.reteach || {};
-              const hasQuestion = Boolean(reteach.miniQuestion);
+          fileName.textContent =
+            "No file selected";
 
-              return `
-                <article class="card recall-card" id="recall-${esc(item.id)}">
-                  <div class="card-title-row">
-                    <div>
-                      <span class="pill sev-${esc(item.severity)}">${esc(item.severity)}</span>
-                      <h3>${esc(item.concept_tag)}</h3>
-                    </div>
-                    <span class="pill">Recall review</span>
-                  </div>
+          pdfInput.value = "";
 
-                  ${hasQuestion
-                    ? `
-                      <div class="recall-question">
-                        <strong>Question</strong>
-                        <p style="margin-top:0.35rem">${esc(reteach.miniQuestion)}</p>
-                      </div>
+          showToast(
+            "Please select a PDF file.",
+            "error"
+          );
 
-                      <button
-                        class="btn secondary compact"
-                        type="button"
-                        style="margin-top:0.7rem"
-                        onclick="toggleRecallAnswer(this)"
-                      >
-                        Show answer
-                      </button>
-
-                      <div class="answer-reveal hidden">
-                        <strong>Answer</strong>
-                        <p style="margin-top:0.35rem">${esc(reteach.miniAnswer)}</p>
-                      </div>
-                    `
-                    : `
-                      <div class="recall-question">
-                        <strong>Diagnosis</strong>
-                        <p class="muted" style="margin-top:0.35rem">${esc(item.diagnosis)}</p>
-                      </div>
-                    `
-                  }
-
-                  <p class="muted small" style="margin-top:1rem">
-                    How well did you recall this concept?
-                  </p>
-
-                  <div class="rating-row">
-                    <button class="btn danger compact" type="button" onclick="review('${esc(item.id)}', 2, this)">Again</button>
-                    <button class="btn secondary compact" type="button" onclick="review('${esc(item.id)}', 3, this)">Hard</button>
-                    <button class="btn secondary compact" type="button" onclick="review('${esc(item.id)}', 4, this)">Good</button>
-                    <button class="btn compact" type="button" onclick="review('${esc(item.id)}', 5, this)">Easy</button>
-                  </div>
-                </article>
-              `;
-            }).join("")}
-
-            <button class="btn secondary full" type="button" onclick="resetAndGoHome()">Back home</button>
-          </div>
-        `;
-
-        go("recall");
-      } catch (error) {
-        toast(error.message, "error");
-        go("home");
-      }
-    }
-
-    function toggleRecallAnswer(button) {
-      const answer = button.nextElementSibling;
-      answer.classList.toggle("hidden");
-      button.textContent = answer.classList.contains("hidden") ? "Show answer" : "Hide answer";
-    }
-
-    async function review(id, quality, button) {
-      setButtonBusy(button, true, "Saving...");
-
-      try {
-        const data = await apiPost(`/api/recall/${id}/review`, { quality });
-        const nextReview = new Date(data.recall.due_at).toLocaleDateString(undefined, {
-          year: "numeric",
-          month: "short",
-          day: "numeric",
-        });
-
-        toast(`Review saved. Next review: ${nextReview}`, "success");
-        await loadRecall();
-      } catch (error) {
-        toast(error.message, "error");
-        setButtonBusy(button, false);
-      }
-    }
-
-    /* =========================================================
-       10. INITIALIZATION
-       ========================================================= */
-    function resetAndGoHome() {
-      state.sessionId = null;
-      state.assessmentId = null;
-      go("home");
-
-      setTimeout(() => {
-        const input = document.getElementById("topicInput");
-        if (input) input.focus();
-      }, 300);
-    }
-
-    function handlePdfSelection(file) {
-      state.selectedPdf = file || null;
-
-      const fileName = document.getElementById("fileName");
-      fileName.textContent = file
-        ? `${file.name} · ${(file.size / 1024 / 1024).toFixed(2)} MB`
-        : "No file selected";
-    }
-
-    async function checkServerHealth() {
-      const status = document.getElementById("serverStatus");
-
-      try {
-        const data = await apiGet("/api/health", { timeoutMs: 12000 });
-        status.className = "server-status online";
-        status.innerHTML = `<span class="status-dot"></span><span>${esc(data.status || "API online")}</span>`;
-      } catch {
-        status.className = "server-status offline";
-        status.innerHTML = `<span class="status-dot"></span><span>API offline</span>`;
-      }
-    }
-
-    function initializeApp() {
-      document.getElementById("year").textContent = new Date().getFullYear();
-
-      const savedTheme = localStorage.getItem("ssa-theme");
-      const systemPrefersLight = window.matchMedia?.("(prefers-color-scheme: light)").matches;
-      setTheme(savedTheme || (systemPrefersLight ? "light" : "dark"));
-
-      document.getElementById("themeToggle").addEventListener("click", () => {
-        setTheme(document.body.classList.contains("light") ? "dark" : "light");
-      });
-
-      document.getElementById("topicInput").addEventListener("keydown", (event) => {
-        if (event.key === "Enter") {
-          startTopic();
-        }
-      });
-
-      const fileInput = document.getElementById("pdfInput");
-      const uploadZone = document.getElementById("uploadZone");
-
-      fileInput.addEventListener("change", () => {
-        handlePdfSelection(fileInput.files[0] || null);
-      });
-
-      ["dragenter", "dragover"].forEach((eventName) => {
-        uploadZone.addEventListener(eventName, (event) => {
-          event.preventDefault();
-          uploadZone.classList.add("dragover");
-        });
-      });
-
-      ["dragleave", "drop"].forEach((eventName) => {
-        uploadZone.addEventListener(eventName, (event) => {
-          event.preventDefault();
-          uploadZone.classList.remove("dragover");
-        });
-      });
-
-      uploadZone.addEventListener("drop", (event) => {
-        const file = event.dataTransfer.files[0];
-
-        if (!file) return;
-
-        if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
-          toast("Please drop a PDF file.", "error");
           return;
         }
 
-        handlePdfSelection(file);
-      });
+        selectedPdf = file;
 
-      checkServerHealth();
+        fileName.textContent =
+          `${file.name} · ` +
+          `${(
+            file.size /
+            1024 /
+            1024
+          ).toFixed(2)} MB`;
+      }
+    );
+
+    [
+      "dragenter",
+      "dragover"
+    ].forEach(function (eventName) {
+      uploadBox.addEventListener(
+        eventName,
+        function (event) {
+          event.preventDefault();
+
+          uploadBox.classList.add(
+            "dragging"
+          );
+        }
+      );
+    });
+
+    [
+      "dragleave",
+      "drop"
+    ].forEach(function (eventName) {
+      uploadBox.addEventListener(
+        eventName,
+        function (event) {
+          event.preventDefault();
+
+          uploadBox.classList.remove(
+            "dragging"
+          );
+        }
+      );
+    });
+
+    uploadBox.addEventListener(
+      "drop",
+      function (event) {
+        const file =
+          event.dataTransfer.files[0];
+
+        if (!file) {
+          return;
+        }
+
+        if (
+          file.type !== "application/pdf" &&
+          !file.name
+            .toLowerCase()
+            .endsWith(".pdf")
+        ) {
+          showToast(
+            "Please drop a PDF file.",
+            "error"
+          );
+
+          return;
+        }
+
+        selectedPdf = file;
+
+        fileName.textContent =
+          `${file.name} · ` +
+          `${(
+            file.size /
+            1024 /
+            1024
+          ).toFixed(2)} MB`;
+      }
+    );
+
+    function studyPdf() {
+      if (!selectedPdf) {
+        showToast(
+          "Please select a PDF first.",
+          "error"
+        );
+
+        return;
+      }
+
+      showToast(
+        "PDF is selected. Add the PDF backend route to process it.",
+        "success"
+      );
     }
 
-    document.addEventListener("DOMContentLoaded", initializeApp);
+    /* =========================
+       LOADING
+    ========================== */
+
+    function showLoading(
+      title,
+      messages
+    ) {
+      const overlay =
+        document.getElementById(
+          "loadingOverlay"
+        );
+
+      const titleElement =
+        document.getElementById(
+          "loadingTitle"
+        );
+
+      const messageElement =
+        document.getElementById(
+          "loadingMessage"
+        );
+
+      titleElement.textContent =
+        title;
+
+      let index = 0;
+
+      messageElement.textContent =
+        messages[0];
+
+      overlay.classList.add("show");
+
+      clearInterval(
+        loadingInterval
+      );
+
+      loadingInterval =
+        setInterval(function () {
+          index =
+            (index + 1) %
+            messages.length;
+
+          messageElement.textContent =
+            messages[index];
+        }, 1700);
+    }
+
+    function hideLoading() {
+      clearInterval(
+        loadingInterval
+      );
+
+      document
+        .getElementById(
+          "loadingOverlay"
+        )
+        .classList.remove("show");
+    }
+
+    /* =========================
+       TOAST
+    ========================== */
+
+    function showToast(
+      message,
+      type = "success"
+    ) {
+      const toast =
+        document.getElementById(
+          "toast"
+        );
+
+      toast.textContent = message;
+
+      toast.className =
+        `toast show ${type}`;
+
+      clearTimeout(
+        toast.hideTimeout
+      );
+
+      toast.hideTimeout =
+        setTimeout(function () {
+          toast.classList.remove(
+            "show"
+          );
+        }, 3500);
+    }
+
+    /* =========================
+       INITIALIZATION
+    ========================== */
+
+    document
+      .getElementById("topicInput")
+      .addEventListener(
+        "keydown",
+        function (event) {
+          if (event.key === "Enter") {
+            generateLesson();
+          }
+        }
+      );
+
+    initializeTheme();
+    checkAssistantStatus();
   </script>
 </body>
 </html>
