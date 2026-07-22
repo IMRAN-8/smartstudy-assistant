@@ -3,10 +3,8 @@
  * A single Node.js + Express server that:
  *   - serves the web UI (public/index.html)
  *   - exposes the API (explain / exam / grade / diagnose / re-teach / spaced recall)
- *   - talks to an LLM through OpenRouter
+ *   - talks to an LLM through OpenRouter (explanation is STREAMED)
  *   - stores everything in Supabase / PostgreSQL
- *
- * Everything lives in this one file to keep the project simple.
  */
 
 require("dotenv").config();
@@ -24,6 +22,7 @@ const OpenAI = require("openai");
 // ---------------------------------------------------------------------------
 const app = express();
 const PORT = process.env.PORT || 5000;
+const MODEL = process.env.LLM_MODEL || "openai/gpt-4o-mini";
 
 app.use(cors());
 app.use(express.json({ limit: "8mb" }));
@@ -37,7 +36,7 @@ const pool = new Pool({
 });
 
 // ---------------------------------------------------------------------------
-// LLM helper (OpenRouter, OpenAI-compatible)
+// LLM helpers (OpenRouter, OpenAI-compatible)
 // ---------------------------------------------------------------------------
 function llmClient() {
   if (!process.env.OPENROUTER_API_KEY) throw new Error("Missing OPENROUTER_API_KEY");
@@ -47,7 +46,7 @@ function llmClient() {
   });
 }
 
-// Extract a JSON object from an LLM response even if it is wrapped in text/fences.
+// Extract a JSON object from an LLM response even if wrapped in text/fences.
 function extractJson(raw) {
   const cleaned = String(raw || "").replace(/```json/g, "").replace(/```/g, "").trim();
   const first = cleaned.indexOf("{");
@@ -55,40 +54,52 @@ function extractJson(raw) {
   return first >= 0 && last > first ? cleaned.slice(first, last + 1) : cleaned;
 }
 
+// Generate strict JSON, with one automatic retry if parsing fails (e.g. truncation).
 async function generateJson(system, user, maxTokens = 1800) {
   const client = llmClient();
-  const response = await client.chat.completions.create({
-    model: process.env.LLM_MODEL || "openai/gpt-4o-mini",
-    temperature: 0.2,
-    max_tokens: maxTokens,
-    response_format: { type: "json_object" },
-    messages: [
-      { role: "system", content: system },
-      { role: "user", content: typeof user === "string" ? user : JSON.stringify(user) },
-    ],
-  });
-  const raw = response.choices?.[0]?.message?.content || "";
-  return JSON.parse(extractJson(raw));
+  const messages = [
+    { role: "system", content: system },
+    { role: "user", content: typeof user === "string" ? user : JSON.stringify(user) },
+  ];
+  let lastErr;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const response = await client.chat.completions.create({
+      model: MODEL,
+      temperature: 0.2,
+      max_tokens: maxTokens,
+      response_format: { type: "json_object" },
+      messages,
+    });
+    const raw = response.choices?.[0]?.message?.content || "";
+    try {
+      return JSON.parse(extractJson(raw));
+    } catch (e) {
+      lastErr = e; // most often a truncated response -> retry once
+    }
+  }
+  throw lastErr || new Error("Failed to parse LLM JSON");
 }
 
 // ---------------------------------------------------------------------------
 // Prompts
 // ---------------------------------------------------------------------------
 const PROMPTS = {
+  // Explanation is now free-form Markdown (streamed + shown in ONE box).
   explanation:
-    "You are SmartStudy Assistant, a friendly teacher. Explain the given topic or study material " +
-    "clearly for a student. Return ONLY valid JSON with this shape: " +
-    '{"title":"...","overview":"...","keyConcepts":[{"name":"...","explanation":"..."}],' +
-    '"examples":["..."],"commonMistakes":["..."],"summary":"..."}.',
+    "You are SmartStudy Assistant, a friendly and clear teacher. Explain the given topic (or study " +
+    "material) thoroughly for a student, in well-structured GitHub-flavored Markdown. Structure it as: " +
+    "a short intro paragraph; then `## ` section headings for Key Concepts, How It Works, Examples, and " +
+    "Common Mistakes; use **bold** for important terms and `- ` bullet lists where helpful; end with a " +
+    "`## Summary` section. Keep it focused and readable. Return ONLY the lesson text (no JSON, no code fences).",
 
   assessment:
-    "Create an exam from the explanation JSON provided. Return ONLY valid JSON: " +
+    "Create an exam from the lesson provided. Return ONLY valid JSON: " +
     '{"questions":[{"type":"mcq","question":"...","options":["a","b","c","d"],' +
     '"correctAnswer":"exact text of the correct option","conceptTag":"short sub-concept name",' +
     '"explanation":"why"},{"type":"short","question":"...","options":null,' +
     '"correctAnswer":"model answer","conceptTag":"...","explanation":"..."}]}. ' +
-    "Make exactly 5 MCQ and 3 short-answer questions. Each question tests ONE specific sub-concept. " +
-    "For MCQ, correctAnswer MUST be the exact text of one of the options.",
+    "Make EXACTLY 8 MCQ and 2 short-answer questions (10 total). Each question tests ONE specific " +
+    "sub-concept. For MCQ, correctAnswer MUST be the exact text of one of the options.",
 
   grading:
     "You grade a student's short answer fairly. Return ONLY valid JSON: " +
@@ -123,7 +134,6 @@ function diagnoseWeakConcepts(graded) {
   return Array.from(weak.values());
 }
 
-// First review interval based on how badly the concept was missed.
 function firstDueDate(severity) {
   const due = new Date();
   due.setDate(due.getDate() + (severity === "high" ? 1 : severity === "medium" ? 2 : 4));
@@ -158,7 +168,6 @@ function sm2(prev, quality) {
 // Routes
 // ---------------------------------------------------------------------------
 
-// Health check
 app.get("/api/health", (_req, res) => res.json({ ok: true, service: "SmartStudy Assistant" }));
 
 // Start a session from a typed topic
@@ -200,36 +209,65 @@ app.post("/api/session/pdf", upload.single("pdf"), async (req, res) => {
   }
 });
 
-// Generate (or return cached) explanation
+// Generate the explanation — STREAMED as plain Markdown text.
 app.post("/api/explanation", async (req, res) => {
   try {
     const { sessionId } = req.body;
     if (!sessionId) return res.status(400).json({ error: "sessionId is required" });
 
-    const cached = await pool.query(
-      "SELECT id, content FROM explanations WHERE session_id=$1 ORDER BY created_at DESC LIMIT 1",
-      [sessionId]
-    );
-    if (cached.rowCount)
-      return res.json({ explanationId: cached.rows[0].id, explanation: cached.rows[0].content });
-
     const s = await pool.query("SELECT topic, source_text FROM study_sessions WHERE id=$1", [sessionId]);
     if (!s.rowCount) return res.status(404).json({ error: "Session not found" });
 
-    const input = s.rows[0].source_text || s.rows[0].topic;
-    const explanation = await generateJson(PROMPTS.explanation, input, 2200);
-    const saved = await pool.query(
-      "INSERT INTO explanations(session_id, content) VALUES($1,$2) RETURNING id, content",
-      [sessionId, explanation]
+    res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    res.setHeader("Cache-Control", "no-cache");
+
+    // Return cached explanation instantly if it exists.
+    const cached = await pool.query(
+      "SELECT content FROM explanations WHERE session_id=$1 ORDER BY created_at DESC LIMIT 1",
+      [sessionId]
     );
-    res.json({ explanationId: saved.rows[0].id, explanation: saved.rows[0].content });
+    if (cached.rowCount) {
+      res.write(cached.rows[0].content?.markdown || "");
+      return res.end();
+    }
+
+    // Stream a fresh explanation from the model.
+    const input = s.rows[0].source_text || s.rows[0].topic;
+    const client = llmClient();
+    const stream = await client.chat.completions.create({
+      model: MODEL,
+      temperature: 0.3,
+      max_tokens: 1500,
+      stream: true,
+      messages: [
+        { role: "system", content: PROMPTS.explanation },
+        { role: "user", content: input },
+      ],
+    });
+
+    let full = "";
+    for await (const part of stream) {
+      const delta = part.choices?.[0]?.delta?.content || "";
+      if (delta) {
+        full += delta;
+        res.write(delta);
+      }
+    }
+
+    // Save before ending so the exam step can rely on it.
+    await pool.query("INSERT INTO explanations(session_id, content) VALUES($1,$2)", [
+      sessionId,
+      { markdown: full },
+    ]);
+    res.end();
   } catch (err) {
     console.error("explanation", err);
-    res.status(500).json({ error: "Failed to generate explanation" });
+    if (!res.headersSent) res.status(500).json({ error: "Failed to generate explanation" });
+    else res.end("\n\n[Error: the explanation was interrupted. Please try again.]");
   }
 });
 
-// Generate an exam for a session
+// Generate an exam (8 MCQ + 2 short) for a session
 app.post("/api/assessment", async (req, res) => {
   try {
     const { sessionId } = req.body;
@@ -241,10 +279,13 @@ app.post("/api/assessment", async (req, res) => {
     );
     if (!ex.rowCount) return res.status(404).json({ error: "Generate an explanation first" });
 
+    const lesson = ex.rows[0].content?.markdown || JSON.stringify(ex.rows[0].content);
+
     const a = await pool.query("INSERT INTO assessments(session_id) VALUES($1) RETURNING id", [sessionId]);
     const assessmentId = a.rows[0].id;
 
-    const generated = await generateJson(PROMPTS.assessment, ex.rows[0].content, 2500);
+    // Higher token budget so 10 questions never truncate; generateJson retries on parse failure.
+    const generated = await generateJson(PROMPTS.assessment, lesson, 4000);
     for (const q of generated.questions || []) {
       await pool.query(
         `INSERT INTO questions(assessment_id, question_type, question_text, options, correct_answer, concept_tag, explanation)
@@ -271,7 +312,7 @@ app.post("/api/assessment", async (req, res) => {
   }
 });
 
-// Submit answers -> grade, diagnose weak concepts, schedule spaced recall
+// Submit answers -> grade (short answers graded in parallel), diagnose, schedule recall
 app.post("/api/submit", async (req, res) => {
   try {
     const { assessmentId, answers = [] } = req.body;
@@ -284,34 +325,36 @@ app.post("/api/submit", async (req, res) => {
     if (!qRows.rowCount) return res.status(404).json({ error: "Exam not found" });
 
     const answerMap = new Map(answers.map((x) => [x.questionId, String(x.answer || "").trim()]));
-    const graded = [];
 
-    for (const q of qRows.rows) {
-      const studentAnswer = answerMap.get(q.id) || "";
-      let result;
-      if (q.question_type === "mcq") {
-        const correct = studentAnswer.toLowerCase() === String(q.correct_answer).trim().toLowerCase();
-        result = {
-          score: correct ? 1 : 0,
-          isCorrect: correct,
-          feedback: correct ? "Correct." : `Correct answer: ${q.correct_answer}`,
+    // Grade every question in parallel (MCQ locally, short answers via LLM).
+    const graded = await Promise.all(
+      qRows.rows.map(async (q) => {
+        const studentAnswer = answerMap.get(q.id) || "";
+        let result;
+        if (q.question_type === "mcq") {
+          const correct = studentAnswer.toLowerCase() === String(q.correct_answer).trim().toLowerCase();
+          result = {
+            score: correct ? 1 : 0,
+            isCorrect: correct,
+            feedback: correct ? "Correct." : `Correct answer: ${q.correct_answer}`,
+          };
+        } else {
+          result = await generateJson(
+            PROMPTS.grading,
+            { question: q.question_text, correctAnswer: q.correct_answer, studentAnswer },
+            400
+          );
+        }
+        return {
+          questionId: q.id,
+          question: q.question_text,
+          conceptTag: q.concept_tag,
+          correctAnswer: q.correct_answer,
+          studentAnswer,
+          ...result,
         };
-      } else {
-        result = await generateJson(
-          PROMPTS.grading,
-          { question: q.question_text, correctAnswer: q.correct_answer, studentAnswer },
-          400
-        );
-      }
-      graded.push({
-        questionId: q.id,
-        question: q.question_text,
-        conceptTag: q.concept_tag,
-        correctAnswer: q.correct_answer,
-        studentAnswer,
-        ...result,
-      });
-    }
+      })
+    );
 
     const sessionId = qRows.rows[0].session_id;
     const score = graded.length
@@ -329,7 +372,6 @@ app.post("/api/submit", async (req, res) => {
       );
     }
 
-    // Diagnose + schedule spaced recall
     const weak = diagnoseWeakConcepts(graded);
     for (const w of weak) {
       const savedWeak = await pool.query(
@@ -364,27 +406,22 @@ app.post("/api/reteach", async (req, res) => {
       "SELECT * FROM weak_concepts WHERE session_id=$1 ORDER BY created_at DESC",
       [sessionId]
     );
-    const lessons = [];
-    for (const c of weak.rows) {
-      const existing = await pool.query(
-        "SELECT content FROM reteach_lessons WHERE weak_concept_id=$1 LIMIT 1",
-        [c.id]
-      );
-      if (existing.rowCount) {
-        lessons.push(existing.rows[0].content);
-        continue;
-      }
-      const lesson = await generateJson(
-        PROMPTS.reteach,
-        { conceptTag: c.concept_tag, diagnosis: c.diagnosis },
-        1200
-      );
-      await pool.query("INSERT INTO reteach_lessons(weak_concept_id, content) VALUES($1,$2)", [
-        c.id,
-        lesson,
-      ]);
-      lessons.push(lesson);
-    }
+    const lessons = await Promise.all(
+      weak.rows.map(async (c) => {
+        const existing = await pool.query(
+          "SELECT content FROM reteach_lessons WHERE weak_concept_id=$1 LIMIT 1",
+          [c.id]
+        );
+        if (existing.rowCount) return existing.rows[0].content;
+        const lesson = await generateJson(
+          PROMPTS.reteach,
+          { conceptTag: c.concept_tag, diagnosis: c.diagnosis },
+          1200
+        );
+        await pool.query("INSERT INTO reteach_lessons(weak_concept_id, content) VALUES($1,$2)", [c.id, lesson]);
+        return lesson;
+      })
+    );
     res.json({ lessons });
   } catch (err) {
     console.error("reteach", err);
@@ -392,7 +429,7 @@ app.post("/api/reteach", async (req, res) => {
   }
 });
 
-// Spaced-recall items that are due now (with their re-teach mini question for re-testing)
+// Spaced-recall items that are due now
 app.get("/api/recall/due", async (_req, res) => {
   try {
     const due = await pool.query(
