@@ -77,9 +77,16 @@ async function generateJson(system, user, maxTokens = 1800) {
 const PROMPTS = {
   explanation:
     "You are SmartStudy Assistant, a friendly teacher. Explain the given topic or study material " +
-    "clearly for a student. Return ONLY valid JSON with this shape: " +
-    '{"title":"...","overview":"...","keyConcepts":[{"name":"...","explanation":"..."}],' +
-    '"examples":["..."],"commonMistakes":["..."],"summary":"..."}.',
+    "clearly for a student. Respond with a single JSON object and nothing else — no markdown, no code " +
+    'fences, no extra commentary, and do NOT wrap the explanation in a single "markdown" field. ' +
+    "The JSON object must have exactly these top-level keys: " +
+    '{"title":"short plain-text title","overview":"2-4 plain sentences, no markdown syntax",' +
+    '"keyConcepts":[{"name":"short concept name","explanation":"2-3 plain sentences, no markdown syntax"}] ' +
+    "(3-6 items), " +
+    '"examples":["short plain-text example", "..."] (2-4 items), ' +
+    '"commonMistakes":["short plain-text mistake", "..."] (2-4 items), ' +
+    '"summary":"1-2 plain sentences, no markdown syntax"}. ' +
+    "Do not use #, *, -, or other markdown syntax anywhere inside the string values.",
 
   assessment:
     "Create an exam from the explanation JSON provided. Return ONLY valid JSON: " +
@@ -100,6 +107,39 @@ const PROMPTS = {
     '{"concept":"...","simpleExplanation":"...","whyConfusing":"...","correctUnderstanding":"...",' +
     '"example":"...","miniQuestion":"...","miniAnswer":"..."}.',
 };
+
+// Minimum shape check for an explanation object before we trust and save it.
+function isValidExplanation(e) {
+  return (
+    !!e &&
+    typeof e.title === "string" &&
+    e.title.trim().length > 0 &&
+    typeof e.overview === "string" &&
+    e.overview.trim().length > 0 &&
+    Array.isArray(e.keyConcepts) &&
+    e.keyConcepts.length > 0
+  );
+}
+
+// Generate an explanation, and retry once (with a stricter reminder) if the
+// model ignores the requested shape (e.g. returns { markdown: "..." }).
+async function generateExplanationWithRetry(input) {
+  let explanation = await generateJson(PROMPTS.explanation, input, 2200);
+  if (!isValidExplanation(explanation)) {
+    console.warn("Explanation missing required keys, retrying:", explanation);
+    explanation = await generateJson(
+      PROMPTS.explanation +
+        " Your previous response did not include the required keys — respond again using exactly " +
+        "the keys title, overview, keyConcepts, examples, commonMistakes, summary, with no other keys.",
+      input,
+      2200
+    );
+  }
+  if (!isValidExplanation(explanation)) {
+    console.error("Explanation still invalid after retry:", explanation);
+  }
+  return explanation;
+}
 
 // ---------------------------------------------------------------------------
 // Diagnosis + spaced-recall (SM-2) logic
@@ -217,7 +257,7 @@ app.post("/api/explanation", async (req, res) => {
     if (!s.rowCount) return res.status(404).json({ error: "Session not found" });
 
     const input = s.rows[0].source_text || s.rows[0].topic;
-    const explanation = await generateJson(PROMPTS.explanation, input, 2200);
+    const explanation = await generateExplanationWithRetry(input);
     const saved = await pool.query(
       "INSERT INTO explanations(session_id, content) VALUES($1,$2) RETURNING id, content",
       [sessionId, explanation]
