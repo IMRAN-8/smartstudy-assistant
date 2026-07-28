@@ -1,0 +1,627 @@
+/* ==========================================================================
+   SmartStudy Assistant — visual system
+   Concept: a card-catalog / study desk. Sessions are index cards you fill
+   out, weak concepts get flagged and re-filed, and the spaced-recall queue
+   is a literal Leitner box — the physical ancestor of the SM-2 algorithm
+   this app runs. Every stamp color below is functional (severity / recall
+   quality), not decorative.
+   ========================================================================== */
+
+:root {
+  /* --- palette: kraft paper + ink + functional stamp colors --- */
+  --paper: #e9e2d0;          /* desk / kraft background */
+  --card: #f7f2e6;           /* index-card stock */
+  --card-shade: #efe7d5;     /* alternating stripe / recessed areas */
+  --ink: #26312c;            /* primary ink */
+  --ink-soft: #5c6b62;       /* secondary ink */
+  --rule: #9fb3c8;           /* faint ruled index-card lines */
+  --tab: #d8c79c;            /* manila folder tab */
+  --tab-ink: #6b5a34;
+
+  --stamp-red: #b5432e;      /* high severity / "again" */
+  --stamp-red-ink: #7c2c1d;
+  --stamp-amber: #b9822c;    /* medium severity / "hard" */
+  --stamp-amber-ink: #7d5717;
+  --stamp-blue: #3d6b86;     /* "good" */
+  --stamp-blue-ink: #274554;
+  --stamp-green: #4b7a5c;    /* mastered / "easy" */
+  --stamp-green-ink: #2f4f3b;
+
+  --shadow-sm: 0 1px 2px rgba(38, 49, 44, 0.12);
+  --shadow-md: 0 6px 20px -6px rgba(38, 49, 44, 0.28);
+  --shadow-lg: 0 18px 48px -12px rgba(38, 49, 44, 0.35);
+
+  --font-label: 'Space Mono', 'Courier New', monospace;
+  --font-body: 'Source Serif 4', Georgia, 'Times New Roman', serif;
+  --font-ui: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+
+  --radius: 3px;
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --space-7: 3rem;
+}
+
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--paper);
+  background-image:
+    radial-gradient(rgba(38,49,44,0.05) 1px, transparent 1px);
+  background-size: 3px 3px;
+  color: var(--ink);
+  font-family: var(--font-ui);
+  line-height: 1.5;
+}
+
+/* --- focus & motion baseline --- */
+a, button, input, textarea, [tabindex] {
+  font-family: inherit;
+}
+:focus-visible {
+  outline: 2px solid var(--stamp-blue);
+  outline-offset: 2px;
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+.visually-hidden {
+  position: absolute; width: 1px; height: 1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
+}
+
+/* ==========================================================================
+   Chrome
+   ========================================================================== */
+.desk {
+  max-width: 780px;
+  margin: 0 auto;
+  padding: var(--space-5) var(--space-4) var(--space-7);
+}
+
+.topbar {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding-bottom: var(--space-4);
+  margin-bottom: var(--space-5);
+  border-bottom: 2px solid var(--ink);
+}
+
+.wordmark {
+  font-family: var(--font-label);
+  font-weight: 700;
+  font-size: 1.25rem;
+  letter-spacing: 0.02em;
+}
+
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.tagline {
+  font-family: var(--font-body);
+  font-style: italic;
+  color: var(--ink-soft);
+  font-size: 0.9rem;
+}
+
+.nav-tab {
+  position: relative;
+  font-family: var(--font-label);
+  font-size: 0.78rem;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  background: var(--tab);
+  color: var(--tab-ink);
+  border: 1px solid var(--ink);
+  border-bottom: none;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius) var(--radius) 0 0;
+  cursor: pointer;
+  transition: transform 0.15s ease;
+}
+.nav-tab:hover { transform: translateY(-2px); }
+.nav-tab .badge {
+  display: inline-block;
+  margin-left: var(--space-2);
+  background: var(--stamp-red);
+  color: var(--card);
+  border-radius: 999px;
+  font-size: 0.7rem;
+  padding: 0 0.4em;
+}
+
+/* ==========================================================================
+   Stepper — reflects the real 4-stage pipeline, not decoration
+   ========================================================================== */
+.stepper {
+  display: flex;
+  gap: var(--space-2);
+  margin-bottom: var(--space-5);
+  flex-wrap: wrap;
+}
+.step {
+  font-family: var(--font-label);
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+}
+.step.is-active {
+  color: var(--card);
+  background: var(--ink);
+  border-color: var(--ink);
+}
+.step.is-done { color: var(--stamp-green-ink); border-color: var(--stamp-green); }
+
+/* ==========================================================================
+   Card component — the index card is the atomic unit of the whole UI
+   ========================================================================== */
+.card {
+  background: var(--card);
+  background-image: repeating-linear-gradient(
+    to bottom,
+    transparent 0,
+    transparent 2.05rem,
+    var(--rule) 2.05rem,
+    var(--rule) calc(2.05rem + 1px)
+  );
+  background-position: 0 4.6rem;
+  border: 1px solid var(--ink);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+  padding: var(--space-5) var(--space-5) var(--space-6);
+  position: relative;
+  animation: card-in 0.4s ease both;
+}
+.card::before {
+  content: "";
+  position: absolute;
+  top: 0; left: var(--space-5); right: var(--space-5);
+  height: 2px;
+  background: var(--ink);
+  opacity: 0.08;
+}
+.card-flat {
+  background-image: none;
+  box-shadow: var(--shadow-md);
+}
+
+@keyframes card-in {
+  from { opacity: 0; transform: translateY(10px) scale(0.99); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.card-eyebrow {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-family: var(--font-label);
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  margin-bottom: var(--space-4);
+}
+
+.card-title {
+  font-family: var(--font-body);
+  font-weight: 700;
+  font-size: 1.7rem;
+  margin: 0 0 var(--space-4);
+  line-height: 1.2;
+}
+
+.card-body {
+  font-family: var(--font-body);
+  font-size: 1.05rem;
+  color: var(--ink);
+}
+.card-body p { margin: 0 0 var(--space-4); }
+
+/* ==========================================================================
+   Buttons
+   ========================================================================== */
+.btn {
+  font-family: var(--font-ui);
+  font-weight: 600;
+  font-size: 0.95rem;
+  border-radius: var(--radius);
+  padding: 0.7em 1.3em;
+  cursor: pointer;
+  border: 1px solid var(--ink);
+  background: transparent;
+  color: var(--ink);
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+.btn:hover { transform: translateY(-1px); }
+.btn:active { transform: translateY(0) scale(0.98); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+
+.btn-stamp {
+  background: var(--stamp-red);
+  border-color: var(--stamp-red-ink);
+  color: var(--card);
+  font-family: var(--font-label);
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  transform: rotate(-0.6deg);
+  box-shadow: var(--shadow-sm);
+}
+.btn-stamp:hover { transform: rotate(-0.6deg) translateY(-2px); box-shadow: var(--shadow-md); }
+
+.btn-ghost { border-color: var(--rule); color: var(--ink-soft); }
+.btn-ghost:hover { border-color: var(--ink); color: var(--ink); }
+
+.btn-row { display: flex; gap: var(--space-3); flex-wrap: wrap; margin-top: var(--space-5); }
+.btn-row.is-end { justify-content: flex-end; }
+
+/* Quality buttons — Again / Hard / Good / Easy: the visible face of SM-2 */
+.quality-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--space-2); }
+.btn-quality {
+  font-family: var(--font-label);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 0.65em 0.4em;
+  border-radius: var(--radius);
+  border: 1px solid;
+  cursor: pointer;
+  background: var(--card);
+  transition: transform 0.12s ease;
+}
+.btn-quality:hover { transform: translateY(-2px); }
+.q-again { border-color: var(--stamp-red); color: var(--stamp-red-ink); }
+.q-hard  { border-color: var(--stamp-amber); color: var(--stamp-amber-ink); }
+.q-good  { border-color: var(--stamp-blue); color: var(--stamp-blue-ink); }
+.q-easy  { border-color: var(--stamp-green); color: var(--stamp-green-ink); }
+.q-again:hover { background: var(--stamp-red); color: var(--card); }
+.q-hard:hover  { background: var(--stamp-amber); color: var(--card); }
+.q-good:hover  { background: var(--stamp-blue); color: var(--card); }
+.q-easy:hover  { background: var(--stamp-green); color: var(--card); }
+
+/* ==========================================================================
+   Entry screen
+   ========================================================================== */
+.mode-toggle { display: flex; gap: var(--space-1); margin-bottom: var(--space-5); }
+.mode-tab {
+  font-family: var(--font-label);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: var(--space-2) var(--space-3);
+  background: var(--card-shade);
+  border: 1px solid var(--ink);
+  border-bottom: none;
+  border-radius: var(--radius) var(--radius) 0 0;
+  cursor: pointer;
+  color: var(--ink-soft);
+}
+.mode-tab.is-active { background: var(--card); color: var(--ink); font-weight: 700; }
+
+.field-label {
+  display: block;
+  font-family: var(--font-label);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ink-soft);
+  margin-bottom: var(--space-2);
+}
+.text-input, textarea.text-input {
+  width: 100%;
+  font-family: var(--font-body);
+  font-size: 1.1rem;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--rule);
+  padding: var(--space-2) 0;
+  color: var(--ink);
+}
+.text-input:focus { border-bottom-color: var(--ink); }
+textarea.text-input { resize: vertical; min-height: 6rem; line-height: 2.05rem; }
+
+.dropzone {
+  border: 2px dashed var(--rule);
+  border-radius: var(--radius);
+  padding: var(--space-6) var(--space-4);
+  text-align: center;
+  color: var(--ink-soft);
+  font-family: var(--font-ui);
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.dropzone:hover, .dropzone.is-drag { border-color: var(--ink); background: var(--card-shade); }
+.dropzone strong { color: var(--ink); }
+.dropzone .file-chip {
+  display: inline-block;
+  margin-top: var(--space-3);
+  font-family: var(--font-label);
+  font-size: 0.85rem;
+  background: var(--tab);
+  color: var(--tab-ink);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius);
+}
+
+/* ==========================================================================
+   Loading
+   ========================================================================== */
+.loading-card { display: flex; align-items: center; gap: var(--space-4); }
+.stamp-spinner {
+  width: 2.4rem; height: 2.4rem;
+  border: 3px solid var(--rule);
+  border-top-color: var(--stamp-red);
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+  flex-shrink: 0;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.loading-text { font-family: var(--font-label); font-size: 0.95rem; color: var(--ink-soft); }
+
+.error-banner {
+  font-family: var(--font-ui);
+  font-size: 0.9rem;
+  background: #f3d9d2;
+  border: 1px solid var(--stamp-red);
+  color: var(--stamp-red-ink);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius);
+  margin-bottom: var(--space-4);
+}
+
+/* ==========================================================================
+   Explanation screen
+   ========================================================================== */
+.concept-tabs { display: flex; flex-wrap: wrap; gap: var(--space-2); margin: var(--space-2) 0 var(--space-5); }
+.concept-tab {
+  font-family: var(--font-label);
+  font-size: 0.78rem;
+  background: var(--tab);
+  color: var(--tab-ink);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius);
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+.concept-tab.is-open { border-color: var(--ink); }
+.concept-detail {
+  font-family: var(--font-body);
+  border-left: 3px solid var(--tab);
+  padding-left: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+
+.section-heading {
+  font-family: var(--font-label);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ink-soft);
+  margin: var(--space-5) 0 var(--space-2);
+}
+
+.mistake-list { list-style: none; margin: 0; padding: 0; }
+.mistake-list li {
+  position: relative;
+  font-family: var(--font-body);
+  padding: var(--space-2) 0 var(--space-2) var(--space-5);
+  margin-bottom: var(--space-1);
+}
+.mistake-list li::before {
+  content: "\2691";
+  position: absolute; left: 0; top: var(--space-2);
+  color: var(--stamp-red);
+}
+
+.example-list { margin: 0; padding-left: 1.2em; font-family: var(--font-body); }
+.example-list li { margin-bottom: var(--space-2); }
+
+/* ==========================================================================
+   Exam screen
+   ========================================================================== */
+.exam-progress {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-bottom: var(--space-4);
+}
+.exam-counter { font-family: var(--font-label); font-size: 0.85rem; color: var(--ink-soft); }
+.exam-dots { display: flex; gap: var(--space-1); }
+.exam-dot {
+  width: 0.6rem; height: 0.6rem; border-radius: 50%;
+  background: var(--rule); cursor: pointer;
+  border: none; padding: 0;
+}
+.exam-dot.is-current { background: var(--ink); }
+.exam-dot.is-answered { background: var(--stamp-blue); }
+
+.option-list { list-style: none; margin: var(--space-4) 0 0; padding: 0; }
+.option-row { margin-bottom: var(--space-3); }
+.option-label {
+  display: flex; align-items: flex-start; gap: var(--space-3);
+  font-family: var(--font-body); font-size: 1.05rem;
+  padding: var(--space-3);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+.option-label:hover { border-color: var(--ink); }
+.option-row input:checked + .option-label,
+.option-label.is-checked {
+  border-color: var(--ink);
+  background: var(--card-shade);
+  font-weight: 600;
+}
+.option-row input { position: absolute; opacity: 0; width: 0; height: 0; }
+.option-row input:focus-visible + .option-label {
+  outline: 2px solid var(--stamp-blue);
+  outline-offset: 2px;
+}
+.option-letter {
+  font-family: var(--font-label);
+  color: var(--ink-soft);
+  flex-shrink: 0;
+}
+
+/* ==========================================================================
+   Results screen
+   ========================================================================== */
+.score-stamp {
+  display: inline-block;
+  font-family: var(--font-label);
+  font-weight: 700;
+  font-size: 3rem;
+  color: var(--stamp-red);
+  border: 4px solid var(--stamp-red);
+  border-radius: var(--radius);
+  padding: 0 var(--space-3);
+  transform: rotate(-2deg);
+  margin-bottom: var(--space-2);
+}
+.score-stamp.is-good { color: var(--stamp-green); border-color: var(--stamp-green); }
+.score-stamp.is-mid { color: var(--stamp-amber); border-color: var(--stamp-amber); }
+.score-caption { font-family: var(--font-body); font-style: italic; color: var(--ink-soft); margin-bottom: var(--space-5); }
+
+.concept-grid { display: grid; gap: var(--space-3); margin-bottom: var(--space-5); }
+.concept-row {
+  display: flex; justify-content: space-between; align-items: center; gap: var(--space-3);
+  padding: var(--space-3); border: 1px solid var(--rule); border-radius: var(--radius);
+  flex-wrap: wrap;
+}
+.concept-name { font-family: var(--font-ui); font-weight: 600; }
+.tag-stamp {
+  font-family: var(--font-label);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0.3em 0.6em;
+  border-radius: var(--radius);
+  border: 1px solid;
+  white-space: nowrap;
+}
+.tag-stamp.high { color: var(--stamp-red-ink); border-color: var(--stamp-red); background: #f3d9d2; }
+.tag-stamp.medium { color: var(--stamp-amber-ink); border-color: var(--stamp-amber); background: #f4e6cd; }
+.tag-stamp.filed { color: var(--stamp-green-ink); border-color: var(--stamp-green); background: #dbe8de; }
+
+.feedback-list { border-top: 1px solid var(--rule); }
+.feedback-item { border-bottom: 1px solid var(--rule); }
+.feedback-toggle {
+  width: 100%; text-align: left; background: none; border: none; cursor: pointer;
+  display: flex; justify-content: space-between; align-items: center; gap: var(--space-3);
+  padding: var(--space-3) 0; font-family: var(--font-ui); font-size: 0.95rem; color: var(--ink);
+}
+.feedback-icon { font-family: var(--font-label); flex-shrink: 0; }
+.feedback-icon.correct { color: var(--stamp-green-ink); }
+.feedback-icon.incorrect { color: var(--stamp-red-ink); }
+.feedback-detail {
+  font-family: var(--font-body); font-size: 0.98rem; color: var(--ink-soft);
+  padding: 0 0 var(--space-4);
+}
+.feedback-detail p { margin: 0 0 var(--space-2); }
+
+/* ==========================================================================
+   Reteach screen — flip-to-reveal mini question
+   ========================================================================== */
+.reteach-block { margin-bottom: var(--space-6); padding-bottom: var(--space-5); border-bottom: 1px dashed var(--rule); }
+.reteach-block:last-child { border-bottom: none; }
+.mini-question {
+  background: var(--card-shade);
+  border-radius: var(--radius);
+  padding: var(--space-4);
+  margin-top: var(--space-4);
+}
+.mini-answer { margin-top: var(--space-3); font-style: italic; color: var(--stamp-green-ink); }
+
+/* ==========================================================================
+   Recall screen — the Leitner box
+   ========================================================================== */
+.recall-item {
+  margin-bottom: var(--space-4);
+  transition: opacity 0.2s ease;
+}
+.recall-item.is-filing { opacity: 0.15; pointer-events: none; }
+.recall-refresher {
+  background: var(--card-shade);
+  border-radius: var(--radius);
+  padding: var(--space-3) var(--space-4);
+  margin: var(--space-3) 0;
+  font-family: var(--font-body);
+}
+
+.empty-state {
+  text-align: center;
+  padding: var(--space-6) var(--space-4);
+  color: var(--ink-soft);
+  font-family: var(--font-body);
+  font-style: italic;
+}
+
+.box-track {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: var(--space-2);
+  margin-top: var(--space-6);
+  padding-top: var(--space-4);
+  border-top: 2px solid var(--ink);
+}
+.box-slot {
+  text-align: center;
+  font-family: var(--font-label);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  padding: var(--space-3) var(--space-1);
+  border: 1px dashed var(--rule);
+  border-radius: var(--radius);
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+.box-slot.slot-pulse { background: var(--tab); border-color: var(--ink); border-style: solid; }
+
+.box-ghost-card {
+  position: fixed;
+  height: 2.4rem;
+  background: var(--card);
+  border: 1px solid var(--ink);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-md);
+  z-index: 50;
+  pointer-events: none;
+  transition: transform 0.6s cubic-bezier(0.2, 0.6, 0.3, 1), opacity 0.6s ease;
+}
+
+/* ==========================================================================
+   Responsive
+   ========================================================================== */
+@media (max-width: 640px) {
+  .desk { padding: var(--space-4) var(--space-3) var(--space-6); }
+  .card { padding: var(--space-4); }
+  .card-title { font-size: 1.4rem; }
+  .score-stamp { font-size: 2.2rem; }
+  .quality-row { grid-template-columns: repeat(2, 1fr); }
+  .btn-row { flex-direction: column; }
+  .btn-row .btn { width: 100%; }
+  .concept-row { flex-direction: column; align-items: flex-start; }
+  .box-track { grid-auto-flow: row; grid-auto-columns: unset; grid-template-columns: repeat(4, 1fr); }
+}
