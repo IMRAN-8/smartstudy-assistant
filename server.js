@@ -76,10 +76,24 @@ async function generateJson(system, user, maxTokens = 1800) {
 // ---------------------------------------------------------------------------
 const PROMPTS = {
   explanation:
-    "You are SmartStudy Assistant, a friendly teacher. Explain the given topic or study material " +
-    "clearly for a student. Return ONLY valid JSON with this shape: " +
-    '{"title":"...","overview":"...","keyConcepts":[{"name":"...","explanation":"..."}],' +
-    '"examples":["..."],"commonMistakes":["..."],"summary":"..."}.',
+    "You are SmartStudy Assistant, an expert teacher writing an in-depth study guide. Explain the given " +
+    "topic or study material thoroughly enough that a student could learn it well with no other resource " +
+    "— prioritize real depth and reasoning over brevity, but every sentence must still teach something " +
+    "(no padding or repetition). Respond with a single JSON object and nothing else — no markdown, no code " +
+    'fences, no extra commentary, and do NOT wrap the explanation in a single "markdown" field. ' +
+    "The JSON object must have exactly these top-level keys: " +
+    '{"title":"short plain-text title","overview":"4-6 plain sentences giving a thorough conceptual ' +
+    'introduction — what the topic is, why it matters, and how its pieces relate, no markdown syntax",' +
+    '"keyConcepts":[{"name":"short concept name","explanation":"4-6 plain sentences that explain the ' +
+    "concept in real depth: the underlying mechanism or reasoning, not just a one-line definition, plus " +
+    'how it connects to the topic overall, no markdown syntax"}] (5-8 items, covering the topic ' +
+    "comprehensively rather than just the basics), " +
+    '"examples":["a concrete, worked example explained in enough detail to be instructive on its own, ' +
+    'not just a one-line label"] (3-5 items), ' +
+    '"commonMistakes":["a specific mistake plus a clear explanation of why it\'s wrong and what to do ' +
+    'instead"] (3-5 items), ' +
+    '"summary":"2-3 plain sentences tying the concepts together and reinforcing the core takeaway"}. ' +
+    "Do not use #, *, -, or other markdown syntax anywhere inside the string values.",
 
   assessment:
     "Create an exam from the explanation JSON provided. Return ONLY valid JSON: " +
@@ -100,6 +114,39 @@ const PROMPTS = {
     '{"concept":"...","simpleExplanation":"...","whyConfusing":"...","correctUnderstanding":"...",' +
     '"example":"...","miniQuestion":"...","miniAnswer":"..."}.',
 };
+
+// Minimum shape check for an explanation object before we trust and save it.
+function isValidExplanation(e) {
+  return (
+    !!e &&
+    typeof e.title === "string" &&
+    e.title.trim().length > 0 &&
+    typeof e.overview === "string" &&
+    e.overview.trim().length > 0 &&
+    Array.isArray(e.keyConcepts) &&
+    e.keyConcepts.length > 0
+  );
+}
+
+// Generate an explanation, and retry once (with a stricter reminder) if the
+// model ignores the requested shape (e.g. returns { markdown: "..." }).
+async function generateExplanationWithRetry(input) {
+  let explanation = await generateJson(PROMPTS.explanation, input, 3200);
+  if (!isValidExplanation(explanation)) {
+    console.warn("Explanation missing required keys, retrying:", explanation);
+    explanation = await generateJson(
+      PROMPTS.explanation +
+        " Your previous response did not include the required keys — respond again using exactly " +
+        "the keys title, overview, keyConcepts, examples, commonMistakes, summary, with no other keys.",
+      input,
+      3200
+    );
+  }
+  if (!isValidExplanation(explanation)) {
+    console.error("Explanation still invalid after retry:", explanation);
+  }
+  return explanation;
+}
 
 // ---------------------------------------------------------------------------
 // Diagnosis + spaced-recall (SM-2) logic
@@ -217,7 +264,7 @@ app.post("/api/explanation", async (req, res) => {
     if (!s.rowCount) return res.status(404).json({ error: "Session not found" });
 
     const input = s.rows[0].source_text || s.rows[0].topic;
-    const explanation = await generateJson(PROMPTS.explanation, input, 2200);
+    const explanation = await generateExplanationWithRetry(input);
     const saved = await pool.query(
       "INSERT INTO explanations(session_id, content) VALUES($1,$2) RETURNING id, content",
       [sessionId, explanation]
