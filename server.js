@@ -131,19 +131,29 @@ function isValidExplanation(e) {
 // Generate an explanation, and retry once (with a stricter reminder) if the
 // model ignores the requested shape (e.g. returns { markdown: "..." }).
 async function generateExplanationWithRetry(input) {
-  let explanation = await generateJson(PROMPTS.explanation, input, 3200);
+  async function attempt(system) {
+    try {
+      return await generateJson(system, input, 4096);
+    } catch (err) {
+      // Covers both network/API errors and JSON.parse failures from a
+      // response that got cut off mid-generation before it was valid JSON.
+      console.warn("Explanation generation attempt failed:", err.message);
+      return null;
+    }
+  }
+
+  let explanation = await attempt(PROMPTS.explanation);
   if (!isValidExplanation(explanation)) {
-    console.warn("Explanation missing required keys, retrying:", explanation);
-    explanation = await generateJson(
+    console.warn("Explanation missing required keys or invalid, retrying:", explanation);
+    explanation = await attempt(
       PROMPTS.explanation +
-        " Your previous response did not include the required keys — respond again using exactly " +
-        "the keys title, overview, keyConcepts, examples, commonMistakes, summary, with no other keys.",
-      input,
-      3200
+        " Your previous response was invalid or incomplete — respond again using exactly the keys " +
+        "title, overview, keyConcepts, examples, commonMistakes, summary, with no other keys, and make " +
+        "sure the JSON is complete and properly closed with no truncation."
     );
   }
   if (!isValidExplanation(explanation)) {
-    console.error("Explanation still invalid after retry:", explanation);
+    throw new Error("The AI could not generate a valid explanation for this topic after two attempts.");
   }
   return explanation;
 }
