@@ -153,9 +153,10 @@ const PROMPTS = {
     "isCorrect is true when score >= 0.7.",
 
   reteach:
-    "Re-teach ONLY the given weak sub-concept to a confused student. Return ONLY valid JSON: " +
-    '{"concept":"...","simpleExplanation":"...","whyConfusing":"...","correctUnderstanding":"...",' +
-    '"example":"...","miniQuestion":"...","miniAnswer":"..."}.',
+    "Re-teach ONLY the given weak sub-concept to a confused student, briefly. Return ONLY valid JSON: " +
+    '{"concept":"...","explanation":"2-3 sentences: the correct understanding, weaving in the ' +
+    'one likely point of confusion","example":"one short concrete example, one sentence",' +
+    '"miniQuestion":"...","miniAnswer":"one short sentence"}. No filler, no restating the question.',
 };
 
 // Minimum shape check for an explanation object before we trust and save it.
@@ -470,27 +471,32 @@ app.post("/api/reteach", async (req, res) => {
       "SELECT * FROM weak_concepts WHERE session_id=$1 ORDER BY created_at DESC",
       [sessionId]
     );
-    const lessons = [];
-    for (const c of weak.rows) {
-      const existing = await pool.query(
-        "SELECT content FROM reteach_lessons WHERE weak_concept_id=$1 LIMIT 1",
-        [c.id]
-      );
-      if (existing.rowCount) {
-        lessons.push(existing.rows[0].content);
-        continue;
-      }
-      const lesson = await generateJson(
-        PROMPTS.reteach,
-        { conceptTag: c.concept_tag, diagnosis: c.diagnosis },
-        1200
-      );
-      await pool.query("INSERT INTO reteach_lessons(weak_concept_id, content) VALUES($1,$2)", [
-        c.id,
-        lesson,
-      ]);
-      lessons.push(lesson);
-    }
+
+    // Each concept's re-teach lesson is independent of the others, so
+    // generate them all concurrently instead of one-at-a-time — with N
+    // weak concepts this cuts wall-clock time roughly by a factor of N
+    // instead of paying for each LLM round-trip back to back.
+    const lessons = await Promise.all(
+      weak.rows.map(async (c) => {
+        const existing = await pool.query(
+          "SELECT content FROM reteach_lessons WHERE weak_concept_id=$1 LIMIT 1",
+          [c.id]
+        );
+        if (existing.rowCount) return existing.rows[0].content;
+
+        const lesson = await generateJson(
+          PROMPTS.reteach,
+          { conceptTag: c.concept_tag, diagnosis: c.diagnosis },
+          700
+        );
+        await pool.query("INSERT INTO reteach_lessons(weak_concept_id, content) VALUES($1,$2)", [
+          c.id,
+          lesson,
+        ]);
+        return lesson;
+      })
+    );
+
     res.json({ lessons });
   } catch (err) {
     console.error("reteach", err);
