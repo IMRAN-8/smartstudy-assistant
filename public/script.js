@@ -414,7 +414,7 @@
           '<button class="btn btn-ghost" data-action="exam-prev" ' + (i === 0 ? "disabled" : "") + '>Back</button>' +
           (isLast
             ? '<button class="btn btn-stamp" data-action="exam-submit">Submit exam</button>'
-            : '<button class="btn btn-stamp" data-action="exam-next">Next Question</button>') +
+            : '<button class="btn btn-stamp" data-action="exam-next">Next card</button>') +
         "</div>" +
       "</div>"
     );
@@ -501,11 +501,7 @@
           return (
             '<div class="reteach-block">' +
               '<div class="section-heading">' + escapeHtml(l.concept || "Concept") + "</div>" +
-              '<div class="card-body"><p>' + escapeHtml(l.simpleExplanation) + "</p></div>" +
-              '<div class="section-heading">Why it\u2019s confusing</div>' +
-              '<div class="card-body"><p>' + escapeHtml(l.whyConfusing) + "</p></div>" +
-              '<div class="section-heading">The correct understanding</div>' +
-              '<div class="card-body"><p>' + escapeHtml(l.correctUnderstanding) + "</p></div>" +
+              '<div class="card-body"><p>' + escapeHtml(l.explanation) + "</p></div>" +
               (l.example ? '<div class="section-heading">Example</div><div class="card-body"><p>' + escapeHtml(l.example) + "</p></div>" : "") +
               '<div class="mini-question">' +
                 "<strong>Quick check:</strong> " + escapeHtml(l.miniQuestion) +
