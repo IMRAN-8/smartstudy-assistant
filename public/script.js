@@ -414,7 +414,7 @@
           '<button class="btn btn-ghost" data-action="exam-prev" ' + (i === 0 ? "disabled" : "") + '>Back</button>' +
           (isLast
             ? '<button class="btn btn-stamp" data-action="exam-submit">Submit exam</button>'
-            : '<button class="btn btn-stamp" data-action="exam-next">Next card</button>') +
+            : '<button class="btn btn-stamp" data-action="exam-next">Next Question</button>') +
         "</div>" +
       "</div>"
     );
