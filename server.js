@@ -55,18 +55,36 @@ function extractJson(raw) {
   return first >= 0 && last > first ? cleaned.slice(first, last + 1) : cleaned;
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function generateJson(system, user, maxTokens = 1800, attempt = 1) {
   const client = llmClient();
-  const response = await client.chat.completions.create({
-    model: process.env.LLM_MODEL || "openai/gpt-4o-mini",
-    temperature: 0.2,
-    max_tokens: maxTokens,
-    response_format: { type: "json_object" },
-    messages: [
-      { role: "system", content: system },
-      { role: "user", content: typeof user === "string" ? user : JSON.stringify(user) },
-    ],
-  });
+  let response;
+  try {
+    response = await client.chat.completions.create({
+      model: process.env.LLM_MODEL || "openai/gpt-4o-mini",
+      temperature: 0.2,
+      max_tokens: maxTokens,
+      response_format: { type: "json_object" },
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: typeof user === "string" ? user : JSON.stringify(user) },
+      ],
+    });
+  } catch (apiErr) {
+    // Transient upstream issues (rate limits, provider hiccups, timeouts) —
+    // worth a short backoff and retry rather than failing the whole request.
+    const status = apiErr?.status || apiErr?.response?.status;
+    const isTransient = status === 429 || status === 500 || status === 502 || status === 503 || status === 529;
+    if (isTransient && attempt < 4) {
+      await sleep(500 * Math.pow(2, attempt - 1)); // 0.5s, 1s, 2s
+      return generateJson(system, user, maxTokens, attempt + 1);
+    }
+    throw apiErr;
+  }
+
   const choice = response.choices?.[0];
   const raw = choice?.message?.content || "";
   const truncated = choice?.finish_reason === "length";
