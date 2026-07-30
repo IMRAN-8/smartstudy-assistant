@@ -55,7 +55,7 @@ function extractJson(raw) {
   return first >= 0 && last > first ? cleaned.slice(first, last + 1) : cleaned;
 }
 
-async function generateJson(system, user, maxTokens = 1800) {
+async function generateJson(system, user, maxTokens = 1800, attempt = 1) {
   const client = llmClient();
   const response = await client.chat.completions.create({
     model: process.env.LLM_MODEL || "openai/gpt-4o-mini",
@@ -67,8 +67,23 @@ async function generateJson(system, user, maxTokens = 1800) {
       { role: "user", content: typeof user === "string" ? user : JSON.stringify(user) },
     ],
   });
-  const raw = response.choices?.[0]?.message?.content || "";
-  return JSON.parse(extractJson(raw));
+  const choice = response.choices?.[0];
+  const raw = choice?.message?.content || "";
+  const truncated = choice?.finish_reason === "length";
+
+  try {
+    return JSON.parse(extractJson(raw));
+  } catch (parseErr) {
+    // The model's JSON came back malformed or cut off mid-string. If it was
+    // cut off (finish_reason "length"), give it more room next time; either
+    // way, retry a couple of times before giving up — a fresh sample is
+    // often well-formed even when the last one wasn't.
+    if (attempt < 3) {
+      const nextMaxTokens = truncated ? Math.min(maxTokens * 2, 8000) : maxTokens;
+      return generateJson(system, user, nextMaxTokens, attempt + 1);
+    }
+    throw new Error(`LLM did not return valid JSON after ${attempt} attempts: ${parseErr.message}`);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -76,19 +91,31 @@ async function generateJson(system, user, maxTokens = 1800) {
 // ---------------------------------------------------------------------------
 const PROMPTS = {
   explanation:
-    "You are SmartStudy Assistant, a friendly teacher. Explain the given topic or study material " +
-    "clearly for a student. Return ONLY valid JSON with this shape: " +
-    '{"title":"...","overview":"...","keyConcepts":[{"name":"...","explanation":"..."}],' +
-    '"examples":["..."],"commonMistakes":["..."],"summary":"..."}.',
+    "You are SmartStudy Assistant, an expert teacher writing a concise study guide. Explain the given " +
+    "topic or study material clearly enough that a student could learn the essentials with no other " +
+    "resource — prioritize the most important points over exhaustive coverage, but every sentence must " +
+    "still teach something (no padding or repetition). Respond with a single JSON object and nothing " +
+    'else — no markdown, no code fences, no extra commentary, and do NOT wrap the explanation in a ' +
+    'single "markdown" field. The JSON object must have exactly these top-level keys: ' +
+    '{"title":"short plain-text title","overview":"4-6 plain sentences giving a clear conceptual ' +
+    'introduction — what the topic is, why it matters, and how its pieces relate, no markdown syntax",' +
+    '"examples":["a concrete, worked example explained in enough detail to be instructive on its own, ' +
+    'not just a one-line label"] (2-3 items), ' +
+    '"commonMistakes":["a specific mistake plus a clear explanation of why it\'s wrong and what to do ' +
+    'instead"] (2-3 items), ' +
+    '"summary":"2-3 plain sentences tying the topic together and reinforcing the core takeaway"}. ' +
+    "Do not use #, *, -, or other markdown syntax anywhere inside the string values.",
 
   assessment:
     "Create an exam from the explanation JSON provided. Return ONLY valid JSON: " +
     '{"questions":[{"type":"mcq","question":"...","options":["a","b","c","d"],' +
     '"correctAnswer":"exact text of the correct option","conceptTag":"short sub-concept name",' +
-    '"explanation":"why"},{"type":"short","question":"...","options":null,' +
-    '"correctAnswer":"model answer","conceptTag":"...","explanation":"..."}]}. ' +
+    '"explanation":"why, in under 12 words"},{"type":"short","question":"...","options":null,' +
+    '"correctAnswer":"model answer, one short sentence","conceptTag":"...",' +
+    '"explanation":"why, in under 12 words"}]}. ' +
     "Make exactly 5 MCQ and 3 short-answer questions. Each question tests ONE specific sub-concept. " +
-    "For MCQ, correctAnswer MUST be the exact text of one of the options.",
+    "For MCQ, correctAnswer MUST be the exact text of one of the options. Keep every field brief — " +
+    "no filler, no restating the question.",
 
   grading:
     "You grade a student's short answer fairly. Return ONLY valid JSON: " +
@@ -100,6 +127,47 @@ const PROMPTS = {
     '{"concept":"...","simpleExplanation":"...","whyConfusing":"...","correctUnderstanding":"...",' +
     '"example":"...","miniQuestion":"...","miniAnswer":"..."}.',
 };
+
+// Minimum shape check for an explanation object before we trust and save it.
+function isValidExplanation(e) {
+  return (
+    !!e &&
+    typeof e.title === "string" &&
+    e.title.trim().length > 0 &&
+    typeof e.overview === "string" &&
+    e.overview.trim().length > 0
+  );
+}
+
+// Generate an explanation, and retry once (with a stricter reminder) if the
+// model ignores the requested shape (e.g. returns { markdown: "..." }).
+async function generateExplanationWithRetry(input) {
+  async function attempt(system) {
+    try {
+      return await generateJson(system, input, 4096);
+    } catch (err) {
+      // Covers both network/API errors and JSON.parse failures from a
+      // response that got cut off mid-generation before it was valid JSON.
+      console.warn("Explanation generation attempt failed:", err.message);
+      return null;
+    }
+  }
+
+  let explanation = await attempt(PROMPTS.explanation);
+  if (!isValidExplanation(explanation)) {
+    console.warn("Explanation missing required keys or invalid, retrying:", explanation);
+    explanation = await attempt(
+      PROMPTS.explanation +
+        " Your previous response was invalid or incomplete — respond again using exactly the keys " +
+        "title, overview, examples, commonMistakes, summary, with no other keys, and make " +
+        "sure the JSON is complete and properly closed with no truncation."
+    );
+  }
+  if (!isValidExplanation(explanation)) {
+    throw new Error("The AI could not generate a valid explanation for this topic after two attempts.");
+  }
+  return explanation;
+}
 
 // ---------------------------------------------------------------------------
 // Diagnosis + spaced-recall (SM-2) logic
@@ -217,7 +285,7 @@ app.post("/api/explanation", async (req, res) => {
     if (!s.rowCount) return res.status(404).json({ error: "Session not found" });
 
     const input = s.rows[0].source_text || s.rows[0].topic;
-    const explanation = await generateJson(PROMPTS.explanation, input, 2200);
+    const explanation = await generateExplanationWithRetry(input);
     const saved = await pool.query(
       "INSERT INTO explanations(session_id, content) VALUES($1,$2) RETURNING id, content",
       [sessionId, explanation]
@@ -244,7 +312,15 @@ app.post("/api/assessment", async (req, res) => {
     const a = await pool.query("INSERT INTO assessments(session_id) VALUES($1) RETURNING id", [sessionId]);
     const assessmentId = a.rows[0].id;
 
-    const generated = await generateJson(PROMPTS.assessment, ex.rows[0].content, 2500);
+    let generated;
+    try {
+      generated = await generateJson(PROMPTS.assessment, ex.rows[0].content, 4096);
+    } catch (genErr) {
+      // Don't leave a question-less assessment row behind if generation
+      // never succeeded.
+      await pool.query("DELETE FROM assessments WHERE id=$1", [assessmentId]);
+      throw genErr;
+    }
     for (const q of generated.questions || []) {
       await pool.query(
         `INSERT INTO questions(assessment_id, question_type, question_text, options, correct_answer, concept_tag, explanation)
