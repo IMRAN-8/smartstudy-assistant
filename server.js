@@ -59,12 +59,17 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function generateJson(system, user, maxTokens = 1800, attempt = 1) {
+// Used if the primary model (LLM_MODEL) keeps failing with a transient
+// error through all its retries — a small, reliably-available model to
+// fall back to so the request still succeeds instead of dying outright.
+const FALLBACK_MODEL = "openai/gpt-4o-mini";
+
+async function generateJson(system, user, maxTokens = 1800, attempt = 1, model = process.env.LLM_MODEL || FALLBACK_MODEL) {
   const client = llmClient();
   let response;
   try {
     response = await client.chat.completions.create({
-      model: process.env.LLM_MODEL || "openai/gpt-4o-mini",
+      model,
       temperature: 0.2,
       max_tokens: maxTokens,
       response_format: { type: "json_object" },
@@ -80,7 +85,14 @@ async function generateJson(system, user, maxTokens = 1800, attempt = 1) {
     const isTransient = status === 429 || status === 500 || status === 502 || status === 503 || status === 529;
     if (isTransient && attempt < 4) {
       await sleep(500 * Math.pow(2, attempt - 1)); // 0.5s, 1s, 2s
-      return generateJson(system, user, maxTokens, attempt + 1);
+      return generateJson(system, user, maxTokens, attempt + 1, model);
+    }
+    // Retries exhausted on the primary model. If it wasn't already the
+    // fallback, try the fallback model once before giving up entirely —
+    // a saturated free pool on one model doesn't mean another is saturated.
+    if (isTransient && model !== FALLBACK_MODEL) {
+      console.warn(`generateJson: ${model} still rate-limited after ${attempt} attempts, falling back to ${FALLBACK_MODEL}`);
+      return generateJson(system, user, maxTokens, 1, FALLBACK_MODEL);
     }
     throw apiErr;
   }
@@ -98,7 +110,7 @@ async function generateJson(system, user, maxTokens = 1800, attempt = 1) {
     // often well-formed even when the last one wasn't.
     if (attempt < 3) {
       const nextMaxTokens = truncated ? Math.min(maxTokens * 2, 8000) : maxTokens;
-      return generateJson(system, user, nextMaxTokens, attempt + 1);
+      return generateJson(system, user, nextMaxTokens, attempt + 1, model);
     }
     throw new Error(`LLM did not return valid JSON after ${attempt} attempts: ${parseErr.message}`);
   }
