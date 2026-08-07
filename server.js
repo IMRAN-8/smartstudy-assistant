@@ -64,6 +64,33 @@ function sleep(ms) {
 // fall back to so the request still succeeds instead of dying outright.
 const FALLBACK_MODEL = "openai/gpt-4o-mini";
 
+
+// Pull the human-readable reason out of an OpenRouter/OpenAI SDK error.
+function describeApiError(err) {
+  return (
+    err?.error?.message ||
+    err?.response?.data?.error?.message ||
+    err?.message ||
+    "unknown upstream error"
+  );
+}
+
+// Turn an upstream status into a message that says what to actually fix.
+// These are the four ways this app dies in production, in order of likelihood.
+function explainLlmFailure(status, detail, model) {
+  if (status === 401)
+    return "The AI provider rejected the API key (401). Check OPENROUTER_API_KEY in your Render environment — it is missing, expired, or was revoked.";
+  if (status === 402)
+    return "The AI provider refused the request for billing reasons (402). Your OpenRouter account is out of credits or has hit its spend limit.";
+  if (status === 403)
+    return `The AI provider denied access to "${model}" (403). Your account may need to enable this model or accept its terms.`;
+  if (status === 400 || status === 404)
+    return `The AI provider does not recognise the model "${model}" (${status}). Fix the LLM_MODEL environment variable — the slug is wrong, deprecated, or no longer offered.`;
+  if (status === 429)
+    return "The AI provider is rate-limiting this key (429). Wait, slow down requests, or switch to a paid model.";
+  return `The AI provider call failed${status ? ` (${status})` : ""}: ${detail}`;
+}
+
 async function generateJson(system, user, maxTokens = 1800, attempt = 1, model = process.env.LLM_MODEL || FALLBACK_MODEL) {
   const client = llmClient();
   let response;
@@ -83,17 +110,30 @@ async function generateJson(system, user, maxTokens = 1800, attempt = 1, model =
     // worth a short backoff and retry rather than failing the whole request.
     const status = apiErr?.status || apiErr?.response?.status;
     const isTransient = status === 429 || status === 500 || status === 502 || status === 503 || status === 529;
+    // A model that OpenRouter rejects outright (unknown slug, deprecated
+    // ":free" variant, not enabled for this account) fails instantly with
+    // 400/404. Retrying the same model is pointless, but the fallback model
+    // is a different slug and usually works — so fall back on these too.
+    const isBadModel = status === 400 || status === 404;
+
     if (isTransient && attempt < 4) {
       await sleep(500 * Math.pow(2, attempt - 1)); // 0.5s, 1s, 2s
       return generateJson(system, user, maxTokens, attempt + 1, model);
     }
-    // Retries exhausted on the primary model. If it wasn't already the
-    // fallback, try the fallback model once before giving up entirely —
-    // a saturated free pool on one model doesn't mean another is saturated.
-    if (isTransient && model !== FALLBACK_MODEL) {
-      console.warn(`generateJson: ${model} still rate-limited after ${attempt} attempts, falling back to ${FALLBACK_MODEL}`);
+    // Retries exhausted (or the model itself is unusable). If we weren't
+    // already on the fallback, try it once before giving up entirely.
+    if ((isTransient || isBadModel) && model !== FALLBACK_MODEL) {
+      console.warn(
+        `generateJson: model "${model}" failed (status ${status}: ${describeApiError(apiErr)}) — falling back to ${FALLBACK_MODEL}`
+      );
       return generateJson(system, user, maxTokens, 1, FALLBACK_MODEL);
     }
+    // Nothing left to try. Re-throw with the upstream reason attached so the
+    // route can log it AND report something actionable to the client.
+    apiErr.llmStatus = status;
+    apiErr.llmModel = model;
+    apiErr.llmDetail = describeApiError(apiErr);
+    apiErr.userMessage = explainLlmFailure(status, apiErr.llmDetail, model);
     throw apiErr;
   }
 
@@ -173,12 +213,18 @@ function isValidExplanation(e) {
 // Generate an explanation, and retry once (with a stricter reminder) if the
 // model ignores the requested shape (e.g. returns { markdown: "..." }).
 async function generateExplanationWithRetry(input) {
+  // Remember why the attempts failed. Previously both attempts swallowed the
+  // error and the caller could only say "could not generate", which hid the
+  // actual cause (bad key / no credits / bad model) from the logs and the UI.
+  let lastError = null;
+
   async function attempt(system) {
     try {
       return await generateJson(system, input, 4096);
     } catch (err) {
       // Covers both network/API errors and JSON.parse failures from a
       // response that got cut off mid-generation before it was valid JSON.
+      lastError = err;
       console.warn("Explanation generation attempt failed:", err.message);
       return null;
     }
@@ -195,7 +241,8 @@ async function generateExplanationWithRetry(input) {
     );
   }
   if (!isValidExplanation(explanation)) {
-    throw new Error("The AI could not generate a valid explanation for this topic after two attempts.");
+    if (lastError) throw lastError; // real upstream reason beats a generic message
+    throw new Error("The AI returned a malformed explanation twice in a row. Try again, or switch LLM_MODEL to a stronger model.");
   }
   return explanation;
 }
@@ -253,12 +300,61 @@ function sm2(prev, quality) {
   return { ease: Number(ease.toFixed(2)), interval_days: interval, repetitions, due_at: due };
 }
 
+
+// Send a failure response that keeps the actionable reason instead of
+// flattening every problem into one generic string.
+function sendFailure(res, err, fallbackMessage) {
+  const message = err?.userMessage || fallbackMessage;
+  const body = { error: message };
+  if (err?.llmStatus) body.upstreamStatus = err.llmStatus;
+  if (err?.llmModel) body.model = err.llmModel;
+  if (err?.llmDetail) body.detail = err.llmDetail;
+  // 502: this server is fine, the upstream AI provider is what failed.
+  return res.status(err?.llmStatus ? 502 : 500).json(body);
+}
+
 // ---------------------------------------------------------------------------
 // Routes
 // ---------------------------------------------------------------------------
 
 // Health check
 app.get("/api/health", (_req, res) => res.json({ ok: true, service: "SmartStudy Assistant" }));
+
+// Diagnostic: proves in one request whether the AI provider is reachable and
+// configured, and reports the provider's own error text if it is not.
+// Never returns the key itself — only whether one is present.
+app.get("/api/diag/llm", async (_req, res) => {
+  const model = process.env.LLM_MODEL || FALLBACK_MODEL;
+  const keyPresent = Boolean(process.env.OPENROUTER_API_KEY);
+  if (!keyPresent) {
+    return res.status(503).json({
+      ok: false,
+      keyPresent: false,
+      model,
+      error: "OPENROUTER_API_KEY is not set in this environment. Add it in Render -> Environment and redeploy.",
+    });
+  }
+  try {
+    const client = llmClient();
+    const r = await client.chat.completions.create({
+      model,
+      max_tokens: 5,
+      messages: [{ role: "user", content: "ping" }],
+    });
+    res.json({ ok: true, keyPresent: true, model, modelUsed: r.model || model });
+  } catch (err) {
+    const status = err?.status || err?.response?.status || null;
+    const detail = describeApiError(err);
+    res.status(502).json({
+      ok: false,
+      keyPresent: true,
+      model,
+      upstreamStatus: status,
+      detail,
+      error: explainLlmFailure(status, detail, model),
+    });
+  }
+});
 
 // Start a session from a typed topic
 app.post("/api/session/topic", async (req, res) => {
@@ -324,7 +420,7 @@ app.post("/api/explanation", async (req, res) => {
     res.json({ explanationId: saved.rows[0].id, explanation: saved.rows[0].content });
   } catch (err) {
     console.error("explanation", err);
-    res.status(500).json({ error: "Failed to generate explanation" });
+    return sendFailure(res, err, "Failed to generate explanation");
   }
 });
 
@@ -374,7 +470,7 @@ app.post("/api/assessment", async (req, res) => {
     res.status(201).json({ assessmentId, questions: questions.rows });
   } catch (err) {
     console.error("assessment", err);
-    res.status(500).json({ error: "Failed to generate exam" });
+    return sendFailure(res, err, "Failed to generate exam");
   }
 });
 
@@ -457,7 +553,7 @@ app.post("/api/submit", async (req, res) => {
     });
   } catch (err) {
     console.error("submit", err);
-    res.status(500).json({ error: "Failed to grade exam" });
+    return sendFailure(res, err, "Failed to grade exam");
   }
 });
 
@@ -500,7 +596,7 @@ app.post("/api/reteach", async (req, res) => {
     res.json({ lessons });
   } catch (err) {
     console.error("reteach", err);
-    res.status(500).json({ error: "Failed to generate re-teaching" });
+    return sendFailure(res, err, "Failed to generate re-teaching");
   }
 });
 
