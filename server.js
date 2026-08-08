@@ -43,16 +43,23 @@ function llmClient() {
   if (!process.env.OPENROUTER_API_KEY) throw new Error("Missing OPENROUTER_API_KEY");
   return new OpenAI({
     apiKey: process.env.OPENROUTER_API_KEY,
-    baseURL: "https://openrouter.ai/api/v1",
+    baseURL: process.env.OPENROUTER_BASE_URL || "https://openrouter.ai/api/v1",
   });
 }
 
-// Extract a JSON object from an LLM response even if it is wrapped in text/fences.
-function extractJson(raw) {
-  const cleaned = String(raw || "").replace(/```json/g, "").replace(/```/g, "").trim();
-  const first = cleaned.indexOf("{");
-  const last = cleaned.lastIndexOf("}");
-  return first >= 0 && last > first ? cleaned.slice(first, last + 1) : cleaned;
+// With strict JSON schemas the provider constrains decoding, so the response
+// is already a bare JSON object. This is just a seatbelt for the rare case a
+// fallback provider wraps it in markdown fences.
+function parseJson(raw) {
+  const text = String(raw || "").trim();
+  try {
+    return JSON.parse(text);
+  } catch {
+    const cleaned = text.replace(/```json/g, "").replace(/```/g, "").trim();
+    const first = cleaned.indexOf("{");
+    const last = cleaned.lastIndexOf("}");
+    return JSON.parse(first >= 0 && last > first ? cleaned.slice(first, last + 1) : cleaned);
+  }
 }
 
 function sleep(ms) {
@@ -60,9 +67,41 @@ function sleep(ms) {
 }
 
 // Used if the primary model (LLM_MODEL) keeps failing with a transient
-// error through all its retries — a small, reliably-available model to
-// fall back to so the request still succeeds instead of dying outright.
-const FALLBACK_MODEL = "openai/gpt-4o-mini";
+// error through all its retries — a smaller sibling that speaks the exact
+// same prompts and schemas, so the request still succeeds instead of dying.
+const FALLBACK_MODEL = process.env.FALLBACK_MODEL || "openai/gpt-oss-20b";
+const DEFAULT_MODEL = process.env.LLM_MODEL || "openai/gpt-oss-120b";
+
+// Provider routing. The SAME model runs at wildly different speeds depending
+// on who hosts it — for gpt-oss-120b it ranges from 23 tps to 448 tps, so
+// leaving this to price-based default routing can make a 2s call take 30s.
+//
+// Every provider listed here was checked to support response_format +
+// structured_outputs. Amazon Bedrock and SambaNova are fast but do NOT, so
+// they are deliberately excluded — routing there would silently break JSON
+// mode. require_parameters is the belt-and-braces version of that check: it
+// tells OpenRouter to skip any provider that can't honour the parameters we
+// send, rather than quietly ignoring them.
+const PROVIDER_ROUTING = {
+  order: ["Groq", "Cerebras", "DeepInfra"],
+  allow_fallbacks: true,
+  require_parameters: true,
+};
+
+// gpt-oss models expose a reasoning budget. Schema-shaped generation needs
+// almost none of it, so "low" keeps latency and token spend down. Grading a
+// free-text answer is the one place judgement actually matters.
+const EFFORT = { generate: "low", grade: "medium" };
+
+// Only reasoning-capable models accept a reasoning budget. Sending one to a
+// model that doesn't (e.g. Granite) combined with require_parameters would
+// leave ZERO eligible providers and fail the request — so gate it on the
+// model. Set REASONING_EFFORT=off to disable entirely.
+const REASONING_MODELS = /gpt-oss|gpt-5|o[34]-|gemini-2\.5|qwen3-.*thinking|deepseek-r/i;
+function reasoningFor(model, effort) {
+  if (process.env.REASONING_EFFORT === "off") return undefined;
+  return REASONING_MODELS.test(model) ? { effort } : undefined;
+}
 
 
 // Pull the human-readable reason out of an OpenRouter/OpenAI SDK error.
@@ -91,7 +130,86 @@ function explainLlmFailure(status, detail, model) {
   return `The AI provider call failed${status ? ` (${status})` : ""}: ${detail}`;
 }
 
-async function generateJson(system, user, maxTokens = 1800, attempt = 1, model = process.env.LLM_MODEL || FALLBACK_MODEL) {
+// Strict output schemas. These are what let us stop *asking* for JSON and
+// start *guaranteeing* it — the provider constrains token selection to the
+// shape below, so malformed or reshaped output is no longer a failure mode.
+const SCHEMAS = {
+  explanation: {
+    type: "object",
+    properties: {
+      title: { type: "string" },
+      overview: { type: "string" },
+      examples: { type: "array", items: { type: "string" } },
+      commonMistakes: { type: "array", items: { type: "string" } },
+      summary: { type: "string" },
+    },
+    required: ["title", "overview", "examples", "commonMistakes", "summary"],
+    additionalProperties: false,
+  },
+  assessment: {
+    type: "object",
+    properties: {
+      questions: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            type: { type: "string", enum: ["mcq", "short"] },
+            question: { type: "string" },
+            // Always an array — empty for short-answer. A nullable union here
+            // would be rejected by some providers' schema engines.
+            options: { type: "array", items: { type: "string" } },
+            correctAnswer: { type: "string" },
+            conceptTag: { type: "string" },
+            explanation: { type: "string" },
+          },
+          required: ["type", "question", "options", "correctAnswer", "conceptTag", "explanation"],
+          additionalProperties: false,
+        },
+      },
+    },
+    required: ["questions"],
+    additionalProperties: false,
+  },
+  grading: {
+    type: "object",
+    properties: {
+      score: { type: "number" },
+      isCorrect: { type: "boolean" },
+      feedback: { type: "string" },
+    },
+    required: ["score", "isCorrect", "feedback"],
+    additionalProperties: false,
+  },
+  reteach: {
+    type: "object",
+    properties: {
+      concept: { type: "string" },
+      explanation: { type: "string" },
+      example: { type: "string" },
+      miniQuestion: { type: "string" },
+      miniAnswer: { type: "string" },
+    },
+    required: ["concept", "explanation", "example", "miniQuestion", "miniAnswer"],
+    additionalProperties: false,
+  },
+};
+
+/**
+ * Call the LLM and get back a parsed object matching `schema`.
+ *
+ * opts: { schema, schemaName, maxTokens, effort, model, attempt }
+ */
+async function generateJson(system, user, opts = {}) {
+  const {
+    schema,
+    schemaName = "response",
+    maxTokens = 1800,
+    effort = EFFORT.generate,
+    model = DEFAULT_MODEL,
+    attempt = 1,
+  } = opts;
+
   const client = llmClient();
   let response;
   try {
@@ -99,7 +217,15 @@ async function generateJson(system, user, maxTokens = 1800, attempt = 1, model =
       model,
       temperature: 0.2,
       max_tokens: maxTokens,
-      response_format: { type: "json_object" },
+      // Pin to fast, schema-capable providers instead of taking whatever
+      // price-sorted routing hands us.
+      provider: PROVIDER_ROUTING,
+      // Keep the reasoning budget small for shape-constrained generation.
+      // Omitted entirely for models that don't support it.
+      ...(reasoningFor(model, effort) ? { reasoning: reasoningFor(model, effort) } : {}),
+      response_format: schema
+        ? { type: "json_schema", json_schema: { name: schemaName, strict: true, schema } }
+        : { type: "json_object" },
       messages: [
         { role: "system", content: system },
         { role: "user", content: typeof user === "string" ? user : JSON.stringify(user) },
@@ -118,7 +244,7 @@ async function generateJson(system, user, maxTokens = 1800, attempt = 1, model =
 
     if (isTransient && attempt < 4) {
       await sleep(500 * Math.pow(2, attempt - 1)); // 0.5s, 1s, 2s
-      return generateJson(system, user, maxTokens, attempt + 1, model);
+      return generateJson(system, user, { ...opts, attempt: attempt + 1 });
     }
     // Retries exhausted (or the model itself is unusable). If we weren't
     // already on the fallback, try it once before giving up entirely.
@@ -126,7 +252,7 @@ async function generateJson(system, user, maxTokens = 1800, attempt = 1, model =
       console.warn(
         `generateJson: model "${model}" failed (status ${status}: ${describeApiError(apiErr)}) — falling back to ${FALLBACK_MODEL}`
       );
-      return generateJson(system, user, maxTokens, 1, FALLBACK_MODEL);
+      return generateJson(system, user, { ...opts, model: FALLBACK_MODEL, attempt: 1 });
     }
     // Nothing left to try. Re-throw with the upstream reason attached so the
     // route can log it AND report something actionable to the client.
@@ -139,20 +265,23 @@ async function generateJson(system, user, maxTokens = 1800, attempt = 1, model =
 
   const choice = response.choices?.[0];
   const raw = choice?.message?.content || "";
-  const truncated = choice?.finish_reason === "length";
+
+  // The schema guarantees shape, but it cannot guarantee the response had
+  // room to finish. A hard token cut-off is the one remaining way to get
+  // unparseable output, so retry that case once with more headroom.
+  if (choice?.finish_reason === "length" && attempt === 1) {
+    console.warn(`generateJson: response hit the ${maxTokens}-token ceiling, retrying with more room`);
+    return generateJson(system, user, {
+      ...opts,
+      maxTokens: Math.min(maxTokens * 2, 8000),
+      attempt: attempt + 1,
+    });
+  }
 
   try {
-    return JSON.parse(extractJson(raw));
+    return parseJson(raw);
   } catch (parseErr) {
-    // The model's JSON came back malformed or cut off mid-string. If it was
-    // cut off (finish_reason "length"), give it more room next time; either
-    // way, retry a couple of times before giving up — a fresh sample is
-    // often well-formed even when the last one wasn't.
-    if (attempt < 3) {
-      const nextMaxTokens = truncated ? Math.min(maxTokens * 2, 8000) : maxTokens;
-      return generateJson(system, user, nextMaxTokens, attempt + 1, model);
-    }
-    throw new Error(`LLM did not return valid JSON after ${attempt} attempts: ${parseErr.message}`);
+    throw new Error(`LLM returned unparseable JSON (model ${model}): ${parseErr.message}`);
   }
 }
 
@@ -160,46 +289,44 @@ async function generateJson(system, user, maxTokens = 1800, attempt = 1, model =
 // Prompts
 // ---------------------------------------------------------------------------
 const PROMPTS = {
+  // Note: output shape is enforced by SCHEMAS, not by these prompts. They only
+  // carry teaching intent — what makes the content *good*, not what makes it
+  // parseable.
   explanation:
-    "You are SmartStudy Assistant, an expert teacher writing a concise study guide. Explain the given " +
-    "topic or study material clearly enough that a student could learn the essentials with no other " +
-    "resource — prioritize the most important points over exhaustive coverage, but every sentence must " +
-    "still teach something (no padding or repetition). Respond with a single JSON object and nothing " +
-    'else — no markdown, no code fences, no extra commentary, and do NOT wrap the explanation in a ' +
-    'single "markdown" field. The JSON object must have exactly these top-level keys: ' +
-    '{"title":"short plain-text title","overview":"4-6 plain sentences giving a clear conceptual ' +
-    'introduction — what the topic is, why it matters, and how its pieces relate, no markdown syntax",' +
-    '"examples":["a concrete, worked example explained in enough detail to be instructive on its own, ' +
-    'not just a one-line label"] (2-3 items), ' +
-    '"commonMistakes":["a specific mistake plus a clear explanation of why it\'s wrong and what to do ' +
-    'instead"] (2-3 items), ' +
-    '"summary":"2-3 plain sentences tying the topic together and reinforcing the core takeaway"}. ' +
-    "Do not use #, *, -, or other markdown syntax anywhere inside the string values.",
+    "You are SmartStudy Assistant, an expert teacher writing a concise study guide. Explain the " +
+    "given topic or study material clearly enough that a student could learn the essentials with " +
+    "no other resource — prioritize the most important points over exhaustive coverage, but every " +
+    "sentence must still teach something (no padding or repetition). " +
+    "overview: 4-6 sentences covering what the topic is, why it matters, and how its pieces relate. " +
+    "examples: 2-3 concrete worked examples, each explained in enough detail to be instructive on " +
+    "its own rather than a one-line label. " +
+    "commonMistakes: 2-3 specific mistakes, each with why it is wrong and what to do instead. " +
+    "summary: 2-3 sentences reinforcing the core takeaway. " +
+    "Write plain prose — do not use #, *, -, or other markdown syntax inside any value.",
 
   assessment:
-    "Create an exam from the explanation JSON provided. Return ONLY valid JSON: " +
-    '{"questions":[{"type":"mcq","question":"...","options":["a","b","c","d"],' +
-    '"correctAnswer":"exact text of the correct option","conceptTag":"short sub-concept name",' +
-    '"explanation":"why, in under 12 words"},{"type":"short","question":"...","options":null,' +
-    '"correctAnswer":"model answer, one short sentence","conceptTag":"...",' +
-    '"explanation":"why, in under 12 words"}]}. ' +
-    "Make exactly 5 MCQ and 3 short-answer questions. Each question tests ONE specific sub-concept. " +
-    "For MCQ, correctAnswer MUST be the exact text of one of the options. Keep every field brief — " +
-    "no filler, no restating the question.",
+    "Create an exam from the explanation provided. Make exactly 5 questions of type \"mcq\" and 3 " +
+    "of type \"short\", and each question must test ONE specific sub-concept. " +
+    "For mcq: give exactly 4 options, and correctAnswer MUST be the verbatim text of one of them. " +
+    "Write plausible distractors — wrong options a student who half-understands would actually " +
+    "consider, never obvious throwaways. " +
+    "For short: options must be an empty array, and correctAnswer is a one-sentence model answer. " +
+    "conceptTag is a short sub-concept name. explanation is why the answer is right, under 12 words.",
 
   grading:
-    "You grade a student's short answer fairly. Return ONLY valid JSON: " +
-    '{"score":0.0-1.0,"isCorrect":true/false,"feedback":"one short sentence"}. ' +
-    "isCorrect is true when score >= 0.7.",
+    "You grade a student's short answer fairly. Award credit for correct understanding even when " +
+    "the wording differs from the model answer; do not reward confident restatement of the " +
+    "question. score is 0.0-1.0, isCorrect is true when score >= 0.7, feedback is one short " +
+    "sentence naming the specific gap or confirming what they got right.",
 
   reteach:
-    "Re-teach ONLY the given weak sub-concept to a confused student, briefly. Return ONLY valid JSON: " +
-    '{"concept":"...","explanation":"2-3 sentences: the correct understanding, weaving in the ' +
-    'one likely point of confusion","example":"one short concrete example, one sentence",' +
-    '"miniQuestion":"...","miniAnswer":"one short sentence"}. No filler, no restating the question.',
+    "Re-teach ONLY the given weak sub-concept to a confused student, briefly. " +
+    "explanation: 2-3 sentences giving the correct understanding while addressing the likely point " +
+    "of confusion. example: one short concrete example. miniQuestion + miniAnswer: a single quick " +
+    "check for understanding. No filler, no restating the question.",
 };
 
-// Minimum shape check for an explanation object before we trust and save it.
+// The schema guarantees the keys exist; this only checks they carry content.
 function isValidExplanation(e) {
   return (
     !!e &&
@@ -210,42 +337,39 @@ function isValidExplanation(e) {
   );
 }
 
-// Generate an explanation, and retry once (with a stricter reminder) if the
-// model ignores the requested shape (e.g. returns { markdown: "..." }).
+// Generate an explanation. Shape is now enforced by the JSON schema, so the
+// only thing left to guard against is a technically-valid-but-empty response.
 async function generateExplanationWithRetry(input) {
-  // Remember why the attempts failed. Previously both attempts swallowed the
-  // error and the caller could only say "could not generate", which hid the
-  // actual cause (bad key / no credits / bad model) from the logs and the UI.
+  // Remember why an attempt failed — swallowing this is what previously hid
+  // the actual cause (bad key / no credits / bad model) from logs and UI.
   let lastError = null;
 
-  async function attempt(system) {
+  async function attempt() {
     try {
-      return await generateJson(system, input, 4096);
+      return await generateJson(PROMPTS.explanation, input, {
+        schema: SCHEMAS.explanation,
+        schemaName: "explanation",
+        maxTokens: 4096,
+      });
     } catch (err) {
-      // Covers both network/API errors and JSON.parse failures from a
-      // response that got cut off mid-generation before it was valid JSON.
       lastError = err;
       console.warn("Explanation generation attempt failed:", err.message);
       return null;
     }
   }
 
-  let explanation = await attempt(PROMPTS.explanation);
+  let explanation = await attempt();
   if (!isValidExplanation(explanation)) {
-    console.warn("Explanation missing required keys or invalid, retrying:", explanation);
-    explanation = await attempt(
-      PROMPTS.explanation +
-        " Your previous response was invalid or incomplete — respond again using exactly the keys " +
-        "title, overview, examples, commonMistakes, summary, with no other keys, and make " +
-        "sure the JSON is complete and properly closed with no truncation."
-    );
+    console.warn("Explanation came back empty, retrying once");
+    explanation = await attempt();
   }
   if (!isValidExplanation(explanation)) {
     if (lastError) throw lastError; // real upstream reason beats a generic message
-    throw new Error("The AI returned a malformed explanation twice in a row. Try again, or switch LLM_MODEL to a stronger model.");
+    throw new Error("The AI returned an empty explanation twice in a row. Try again, or switch LLM_MODEL to a stronger model.");
   }
   return explanation;
 }
+
 
 // ---------------------------------------------------------------------------
 // Diagnosis + spaced-recall (SM-2) logic
@@ -324,7 +448,7 @@ app.get("/api/health", (_req, res) => res.json({ ok: true, service: "SmartStudy 
 // configured, and reports the provider's own error text if it is not.
 // Never returns the key itself — only whether one is present.
 app.get("/api/diag/llm", async (_req, res) => {
-  const model = process.env.LLM_MODEL || FALLBACK_MODEL;
+  const model = DEFAULT_MODEL;
   const keyPresent = Boolean(process.env.OPENROUTER_API_KEY);
   if (!keyPresent) {
     return res.status(503).json({
@@ -339,9 +463,23 @@ app.get("/api/diag/llm", async (_req, res) => {
     const r = await client.chat.completions.create({
       model,
       max_tokens: 5,
+      provider: PROVIDER_ROUTING,
+      ...(reasoningFor(model, EFFORT.generate)
+        ? { reasoning: reasoningFor(model, EFFORT.generate) }
+        : {}),
       messages: [{ role: "user", content: "ping" }],
     });
-    res.json({ ok: true, keyPresent: true, model, modelUsed: r.model || model });
+    res.json({
+      ok: true,
+      keyPresent: true,
+      model,
+      modelUsed: r.model || model,
+      // Which host actually served this — the whole point of pinning. If this
+      // is not one of the providers below, routing is not being honoured.
+      servedBy: r.provider || "unknown",
+      routing: PROVIDER_ROUTING,
+      fallbackModel: FALLBACK_MODEL,
+    });
   } catch (err) {
     const status = err?.status || err?.response?.status || null;
     const detail = describeApiError(err);
@@ -441,7 +579,11 @@ app.post("/api/assessment", async (req, res) => {
 
     let generated;
     try {
-      generated = await generateJson(PROMPTS.assessment, ex.rows[0].content, 4096);
+      generated = await generateJson(PROMPTS.assessment, ex.rows[0].content, {
+        schema: SCHEMAS.assessment,
+        schemaName: "assessment",
+        maxTokens: 4096,
+      });
     } catch (genErr) {
       // Don't leave a question-less assessment row behind if generation
       // never succeeded.
@@ -456,7 +598,7 @@ app.post("/api/assessment", async (req, res) => {
           assessmentId,
           q.type,
           q.question,
-          q.options ? JSON.stringify(q.options) : null,
+          q.options && q.options.length ? JSON.stringify(q.options) : null,
           String(q.correctAnswer ?? ""),
           q.conceptTag || "General",
           q.explanation || "",
@@ -503,7 +645,14 @@ app.post("/api/submit", async (req, res) => {
         result = await generateJson(
           PROMPTS.grading,
           { question: q.question_text, correctAnswer: q.correct_answer, studentAnswer },
-          400
+          {
+            schema: SCHEMAS.grading,
+            schemaName: "grading",
+            // Judging a free-text answer is the one call where thinking pays
+            // for itself — and at ~40 output tokens it costs almost nothing.
+            effort: EFFORT.grade,
+            maxTokens: 800,
+          }
         );
       }
       graded.push({
@@ -583,7 +732,7 @@ app.post("/api/reteach", async (req, res) => {
         const lesson = await generateJson(
           PROMPTS.reteach,
           { conceptTag: c.concept_tag, diagnosis: c.diagnosis },
-          700
+          { schema: SCHEMAS.reteach, schemaName: "reteach", maxTokens: 700 }
         );
         await pool.query("INSERT INTO reteach_lessons(weak_concept_id, content) VALUES($1,$2)", [
           c.id,
