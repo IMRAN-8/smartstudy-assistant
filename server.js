@@ -1,865 +1,1058 @@
-(function () {
-  "use strict";
+/**
+ * SmartStudy Assistant (SSA)
+ * A single Node.js + Express server that:
+ *   - serves the web UI (public/index.html)
+ *   - exposes the API (explain / exam / grade / diagnose / re-teach / spaced recall)
+ *   - talks to an LLM through OpenRouter
+ *   - stores everything in Supabase / PostgreSQL
+ *
+ * Everything lives in this one file to keep the project simple.
+ */
 
-  var APP = document.getElementById("app");
-  var REDUCE_MOTION = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+require("dotenv").config();
 
-  var QUALITY = { AGAIN: 2, HARD: 3, GOOD: 4, EASY: 5 };
-  // Human-framed milestones the Leitner box visualizes an interval against.
-  var SLOTS = [
-    { days: 1, label: "Tomorrow" },
-    { days: 2, label: "2 days" },
-    { days: 4, label: "4 days" },
-    { days: 7, label: "1 wk" },
-    { days: 14, label: "2 wks" },
-    { days: 30, label: "1 mo" },
-    { days: Infinity, label: "Mastered" },
-  ];
-  var STEP_ORDER = ["explanation", "exam", "results", "recall"];
-  var STEP_LABEL = { explanation: "Lesson", exam: "Exam", results: "Results", recall: "Recall" };
+const express = require("express");
+const cors = require("cors");
+const multer = require("multer");
+const fs = require("fs");
+const path = require("path");
+const { Pool } = require("pg");
+const OpenAI = require("openai");
 
-  var USER_KEY = "smartstudy.userId";
+// ---------------------------------------------------------------------------
+// Setup
+// ---------------------------------------------------------------------------
+const app = express();
+const PORT = process.env.PORT || 5000;
 
-  var state = {
-    screen: "entry",
-    userId: null,
-    userInput: "",
-    history: null,
-    entryMode: "topic",
-    topicInput: "",
-    pdfFile: null,
-    isDragging: false,
-    loadingMessage: "",
-    error: null,
-    sessionId: null,
-    topic: "",
-    explanation: null,
-    assessmentId: null,
-    questions: [],
-    currentCard: 0,
-    answers: {},
-    submission: null,
-    openFeedback: {},
-    reteachLessons: [],
-    revealedMini: {},
-    recallDue: [],
-    recallRevealed: {},
+app.use(cors());
+app.use(express.json({ limit: "8mb" }));
+app.use(express.static(path.join(__dirname, "public")));
+
+const upload = multer({ dest: "uploads/", limits: { fileSize: 8 * 1024 * 1024 } });
+
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.NODE_ENV === "production" ? { rejectUnauthorized: false } : false,
+});
+
+// ---------------------------------------------------------------------------
+// LLM helper (OpenRouter, OpenAI-compatible)
+// ---------------------------------------------------------------------------
+function llmClient() {
+  if (!process.env.OPENROUTER_API_KEY) throw new Error("Missing OPENROUTER_API_KEY");
+  return new OpenAI({
+    apiKey: process.env.OPENROUTER_API_KEY,
+    baseURL: process.env.OPENROUTER_BASE_URL || "https://openrouter.ai/api/v1",
+  });
+}
+
+// With strict JSON schemas the provider constrains decoding, so the response
+// is already a bare JSON object. This is just a seatbelt for the rare case a
+// fallback provider wraps it in markdown fences.
+function parseJson(raw) {
+  const text = String(raw || "").trim();
+  try {
+    return JSON.parse(text);
+  } catch {
+    const cleaned = text.replace(/```json/g, "").replace(/```/g, "").trim();
+    const first = cleaned.indexOf("{");
+    const last = cleaned.lastIndexOf("}");
+    return JSON.parse(first >= 0 && last > first ? cleaned.slice(first, last + 1) : cleaned);
+  }
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Used if the primary model (LLM_MODEL) keeps failing with a transient
+// error through all its retries — a smaller sibling that speaks the exact
+// same prompts and schemas, so the request still succeeds instead of dying.
+const FALLBACK_MODEL = process.env.FALLBACK_MODEL || "openai/gpt-oss-20b";
+const DEFAULT_MODEL = process.env.LLM_MODEL || "openai/gpt-oss-120b";
+
+// Provider routing. The SAME model runs at wildly different speeds depending
+// on who hosts it — for gpt-oss-120b it ranges from 23 tps to 448 tps, so
+// leaving this to price-based default routing can make a 2s call take 30s.
+//
+// Every provider listed here was checked to support response_format +
+// structured_outputs. Amazon Bedrock and SambaNova are fast but do NOT, so
+// they are deliberately excluded — routing there would silently break JSON
+// mode. require_parameters is the belt-and-braces version of that check: it
+// tells OpenRouter to skip any provider that can't honour the parameters we
+// send, rather than quietly ignoring them.
+const PROVIDER_ROUTING = {
+  order: ["Groq", "Cerebras", "DeepInfra"],
+  allow_fallbacks: true,
+  require_parameters: true,
+};
+
+// gpt-oss models expose a reasoning budget. Schema-shaped generation needs
+// almost none of it, so "low" keeps latency and token spend down. Grading a
+// free-text answer is the one place judgement actually matters.
+const EFFORT = { generate: "low", grade: "medium" };
+
+// Only reasoning-capable models accept a reasoning budget. Sending one to a
+// model that doesn't (e.g. Granite) combined with require_parameters would
+// leave ZERO eligible providers and fail the request — so gate it on the
+// model. Set REASONING_EFFORT=off to disable entirely.
+const REASONING_MODELS = /gpt-oss|gpt-5|o[34]-|gemini-2\.5|qwen3-.*thinking|deepseek-r/i;
+function reasoningFor(model, effort) {
+  if (process.env.REASONING_EFFORT === "off") return undefined;
+  return REASONING_MODELS.test(model) ? { effort } : undefined;
+}
+
+
+// Pull the human-readable reason out of an OpenRouter/OpenAI SDK error.
+function describeApiError(err) {
+  return (
+    err?.error?.message ||
+    err?.response?.data?.error?.message ||
+    err?.message ||
+    "unknown upstream error"
+  );
+}
+
+// Turn an upstream status into a message that says what to actually fix.
+// These are the four ways this app dies in production, in order of likelihood.
+function explainLlmFailure(status, detail, model) {
+  if (status === 401)
+    return "The AI provider rejected the API key (401). Check OPENROUTER_API_KEY in your Render environment — it is missing, expired, or was revoked.";
+  if (status === 402)
+    return "The AI provider refused the request for billing reasons (402). Your OpenRouter account is out of credits or has hit its spend limit.";
+  if (status === 403)
+    return `The AI provider denied access to "${model}" (403). Your account may need to enable this model or accept its terms.`;
+  if (status === 400 || status === 404)
+    return `The AI provider does not recognise the model "${model}" (${status}). Fix the LLM_MODEL environment variable — the slug is wrong, deprecated, or no longer offered.`;
+  if (status === 429)
+    return "The AI provider is rate-limiting this key (429). Wait, slow down requests, or switch to a paid model.";
+  return `The AI provider call failed${status ? ` (${status})` : ""}: ${detail}`;
+}
+
+// Strict output schemas. These are what let us stop *asking* for JSON and
+// start *guaranteeing* it — the provider constrains token selection to the
+// shape below, so malformed or reshaped output is no longer a failure mode.
+const SCHEMAS = {
+  explanation: {
+    type: "object",
+    properties: {
+      title: { type: "string" },
+      overview: { type: "string" },
+      examples: { type: "array", items: { type: "string" } },
+      commonMistakes: { type: "array", items: { type: "string" } },
+      summary: { type: "string" },
+    },
+    required: ["title", "overview", "examples", "commonMistakes", "summary"],
+    additionalProperties: false,
+  },
+  assessment: {
+    type: "object",
+    properties: {
+      questions: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            type: { type: "string", enum: ["mcq", "short"] },
+            question: { type: "string" },
+            // Always an array — empty for short-answer. A nullable union here
+            // would be rejected by some providers' schema engines.
+            options: { type: "array", items: { type: "string" } },
+            correctAnswer: { type: "string" },
+            conceptTag: { type: "string" },
+            explanation: { type: "string" },
+          },
+          required: ["type", "question", "options", "correctAnswer", "conceptTag", "explanation"],
+          additionalProperties: false,
+        },
+      },
+    },
+    required: ["questions"],
+    additionalProperties: false,
+  },
+  grading: {
+    type: "object",
+    properties: {
+      score: { type: "number" },
+      isCorrect: { type: "boolean" },
+      feedback: { type: "string" },
+    },
+    required: ["score", "isCorrect", "feedback"],
+    additionalProperties: false,
+  },
+  reteach: {
+    type: "object",
+    properties: {
+      concept: { type: "string" },
+      explanation: { type: "string" },
+      example: { type: "string" },
+      miniQuestion: { type: "string" },
+      miniAnswer: { type: "string" },
+    },
+    required: ["concept", "explanation", "example", "miniQuestion", "miniAnswer"],
+    additionalProperties: false,
+  },
+};
+
+/**
+ * Call the LLM and get back a parsed object matching `schema`.
+ *
+ * opts: { schema, schemaName, maxTokens, effort, model, attempt }
+ */
+async function generateJson(system, user, opts = {}) {
+  const {
+    schema,
+    schemaName = "response",
+    maxTokens = 1800,
+    effort = EFFORT.generate,
+    model = DEFAULT_MODEL,
+    attempt = 1,
+  } = opts;
+
+  const client = llmClient();
+  let response;
+  try {
+    response = await client.chat.completions.create({
+      model,
+      temperature: 0.2,
+      max_tokens: maxTokens,
+      // Pin to fast, schema-capable providers instead of taking whatever
+      // price-sorted routing hands us.
+      provider: PROVIDER_ROUTING,
+      // Keep the reasoning budget small for shape-constrained generation.
+      // Omitted entirely for models that don't support it.
+      ...(reasoningFor(model, effort) ? { reasoning: reasoningFor(model, effort) } : {}),
+      response_format: schema
+        ? { type: "json_schema", json_schema: { name: schemaName, strict: true, schema } }
+        : { type: "json_object" },
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: typeof user === "string" ? user : JSON.stringify(user) },
+      ],
+    });
+  } catch (apiErr) {
+    // Transient upstream issues (rate limits, provider hiccups, timeouts) —
+    // worth a short backoff and retry rather than failing the whole request.
+    const status = apiErr?.status || apiErr?.response?.status;
+    const isTransient = status === 429 || status === 500 || status === 502 || status === 503 || status === 529;
+    // A model that OpenRouter rejects outright (unknown slug, deprecated
+    // ":free" variant, not enabled for this account) fails instantly with
+    // 400/404. Retrying the same model is pointless, but the fallback model
+    // is a different slug and usually works — so fall back on these too.
+    const isBadModel = status === 400 || status === 404;
+
+    if (isTransient && attempt < 4) {
+      await sleep(500 * Math.pow(2, attempt - 1)); // 0.5s, 1s, 2s
+      return generateJson(system, user, { ...opts, attempt: attempt + 1 });
+    }
+    // Retries exhausted (or the model itself is unusable). If we weren't
+    // already on the fallback, try it once before giving up entirely.
+    if ((isTransient || isBadModel) && model !== FALLBACK_MODEL) {
+      console.warn(
+        `generateJson: model "${model}" failed (status ${status}: ${describeApiError(apiErr)}) — falling back to ${FALLBACK_MODEL}`
+      );
+      return generateJson(system, user, { ...opts, model: FALLBACK_MODEL, attempt: 1 });
+    }
+    // Nothing left to try. Re-throw with the upstream reason attached so the
+    // route can log it AND report something actionable to the client.
+    apiErr.llmStatus = status;
+    apiErr.llmModel = model;
+    apiErr.llmDetail = describeApiError(apiErr);
+    apiErr.userMessage = explainLlmFailure(status, apiErr.llmDetail, model);
+    throw apiErr;
+  }
+
+  const choice = response.choices?.[0];
+  const raw = choice?.message?.content || "";
+
+  // The schema guarantees shape, but it cannot guarantee the response had
+  // room to finish. A hard token cut-off is the one remaining way to get
+  // unparseable output, so retry that case once with more headroom.
+  if (choice?.finish_reason === "length" && attempt === 1) {
+    console.warn(`generateJson: response hit the ${maxTokens}-token ceiling, retrying with more room`);
+    return generateJson(system, user, {
+      ...opts,
+      maxTokens: Math.min(maxTokens * 2, 8000),
+      attempt: attempt + 1,
+    });
+  }
+
+  try {
+    return parseJson(raw);
+  } catch (parseErr) {
+    throw new Error(`LLM returned unparseable JSON (model ${model}): ${parseErr.message}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Prompts
+// ---------------------------------------------------------------------------
+const PROMPTS = {
+  // Note: output shape is enforced by SCHEMAS, not by these prompts. They only
+  // carry teaching intent — what makes the content *good*, not what makes it
+  // parseable.
+  explanation:
+    "You are SmartStudy Assistant, an expert teacher writing a concise study guide. Explain the " +
+    "given topic or study material clearly enough that a student could learn the essentials with " +
+    "no other resource — prioritize the most important points over exhaustive coverage, but every " +
+    "sentence must still teach something (no padding or repetition). " +
+    "overview: 4-6 sentences covering what the topic is, why it matters, and how its pieces relate. " +
+    "examples: 2-3 concrete worked examples, each explained in enough detail to be instructive on " +
+    "its own rather than a one-line label. " +
+    "commonMistakes: 2-3 specific mistakes, each with why it is wrong and what to do instead. " +
+    "summary: 2-3 sentences reinforcing the core takeaway. " +
+    "Write plain prose — do not use #, *, -, or other markdown syntax inside any value.",
+
+  assessment:
+    "Create an exam from the explanation provided. Make exactly 5 questions of type \"mcq\" and 3 " +
+    "of type \"short\", and each question must test ONE specific sub-concept. " +
+    "For mcq: give exactly 4 options, and correctAnswer MUST be the verbatim text of one of them. " +
+    "Write plausible distractors — wrong options a student who half-understands would actually " +
+    "consider, never obvious throwaways. " +
+    "For short: options must be an empty array, and correctAnswer is a one-sentence model answer. " +
+    "conceptTag is a short sub-concept name. explanation is why the answer is right, under 12 words.",
+
+  grading:
+    "You grade a student's short answer fairly. Award credit for correct understanding even when " +
+    "the wording differs from the model answer; do not reward confident restatement of the " +
+    "question. score is 0.0-1.0, isCorrect is true when score >= 0.7, feedback is one short " +
+    "sentence naming the specific gap or confirming what they got right.",
+
+  reteach:
+    "Re-teach ONLY the given weak sub-concept to a confused student, briefly. " +
+    "explanation: 2-3 sentences giving the correct understanding while addressing the likely point " +
+    "of confusion. example: one short concrete example. miniQuestion + miniAnswer: a single quick " +
+    "check for understanding. No filler, no restating the question.",
+};
+
+// The schema guarantees the keys exist; this only checks they carry content.
+function isValidExplanation(e) {
+  return (
+    !!e &&
+    typeof e.title === "string" &&
+    e.title.trim().length > 0 &&
+    typeof e.overview === "string" &&
+    e.overview.trim().length > 0
+  );
+}
+
+// Generate an explanation. Shape is now enforced by the JSON schema, so the
+// only thing left to guard against is a technically-valid-but-empty response.
+async function generateExplanationWithRetry(input) {
+  // Remember why an attempt failed — swallowing this is what previously hid
+  // the actual cause (bad key / no credits / bad model) from logs and UI.
+  let lastError = null;
+
+  async function attempt() {
+    try {
+      return await generateJson(PROMPTS.explanation, input, {
+        schema: SCHEMAS.explanation,
+        schemaName: "explanation",
+        maxTokens: 4096,
+      });
+    } catch (err) {
+      lastError = err;
+      console.warn("Explanation generation attempt failed:", err.message);
+      return null;
+    }
+  }
+
+  let explanation = await attempt();
+  if (!isValidExplanation(explanation)) {
+    console.warn("Explanation came back empty, retrying once");
+    explanation = await attempt();
+  }
+  if (!isValidExplanation(explanation)) {
+    if (lastError) throw lastError; // real upstream reason beats a generic message
+    throw new Error("The AI returned an empty explanation twice in a row. Try again, or switch LLM_MODEL to a stronger model.");
+  }
+  return explanation;
+}
+
+
+// ---------------------------------------------------------------------------
+// Diagnosis + spaced-recall (SM-2) logic
+// ---------------------------------------------------------------------------
+function diagnoseWeakConcepts(graded) {
+  const weak = new Map();
+  for (const item of graded) {
+    if (item.isCorrect && Number(item.score) >= 0.7) continue;
+    const severity = Number(item.score) < 0.4 ? "high" : "medium";
+    const existing = weak.get(item.conceptTag);
+    if (!existing) {
+      weak.set(item.conceptTag, {
+        conceptTag: item.conceptTag,
+        diagnosis: `The learner struggled with "${item.conceptTag}". ${item.feedback || "Review this sub-concept."}`,
+        severity,
+      });
+    } else if (severity === "high") {
+      existing.severity = "high";
+    }
+  }
+  return Array.from(weak.values());
+}
+
+// First review interval based on how badly the concept was missed.
+function firstDueDate(severity) {
+  const due = new Date();
+  due.setDate(due.getDate() + (severity === "high" ? 1 : severity === "medium" ? 2 : 4));
+  return due;
+}
+
+// SM-2 update. quality: 2=Again, 3=Hard, 4=Good, 5=Easy.
+function sm2(prev, quality) {
+  let { ease, interval_days: interval, repetitions } = prev;
+  ease = Number(ease) || 2.5;
+  interval = Number(interval) || 0;
+  repetitions = Number(repetitions) || 0;
+
+  if (quality < 3) {
+    repetitions = 0;
+    interval = 1;
+  } else {
+    if (repetitions === 0) interval = 1;
+    else if (repetitions === 1) interval = 6;
+    else interval = Math.round(interval * ease);
+    repetitions += 1;
+  }
+  ease = ease + (0.1 - (5 - quality) * (0.08 + (5 - quality) * 0.02));
+  if (ease < 1.3) ease = 1.3;
+
+  const due = new Date();
+  due.setDate(due.getDate() + interval);
+  return { ease: Number(ease.toFixed(2)), interval_days: interval, repetitions, due_at: due };
+}
+
+
+// Send a failure response that keeps the actionable reason instead of
+// flattening every problem into one generic string.
+function sendFailure(res, err, fallbackMessage) {
+  if (isSchemaError(err)) return sendDbFailure(res, err, fallbackMessage);
+  const message = err?.userMessage || fallbackMessage;
+  const body = { error: message };
+  if (err?.llmStatus) body.upstreamStatus = err.llmStatus;
+  if (err?.llmModel) body.model = err.llmModel;
+  if (err?.llmDetail) body.detail = err.llmDetail;
+  // 502: this server is fine, the upstream AI provider is what failed.
+  return res.status(err?.llmStatus ? 502 : 500).json(body);
+}
+
+// ---------------------------------------------------------------------------
+// Routes
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Schema drift
+// ---------------------------------------------------------------------------
+// Deploying code before running the matching schema.sql is the single easiest
+// way to break this app, and Postgres reports it with a precise error code.
+// Surface that as an instruction instead of a generic 500.
+const SCHEMA_ERROR_CODES = new Set(["42P01", "42703"]); // undefined_table, undefined_column
+const SCHEMA_HINT =
+  "The database is missing tables or columns this version needs. Run the latest schema.sql " +
+  "in Supabase -> SQL Editor, then try again. Visit /api/diag/db to see exactly what is missing.";
+
+function isSchemaError(err) {
+  return !!err && SCHEMA_ERROR_CODES.has(err.code);
+}
+
+// Every database catch block goes through here so a migration problem always
+// reports itself the same way, wherever it surfaces first.
+function sendDbFailure(res, err, fallbackMessage) {
+  if (isSchemaError(err)) {
+    return res.status(503).json({ error: SCHEMA_HINT, detail: `${err.code}: ${err.message}` });
+  }
+  return res.status(500).json({ error: fallbackMessage });
+}
+
+// ---------------------------------------------------------------------------
+// Users + ownership
+// ---------------------------------------------------------------------------
+// IMPORTANT: this is identity, NOT authentication. A person types a user ID
+// and owns whatever is filed under it. There is no password, so this
+// SEPARATES users' data — it does not PROTECT it. Anyone who knows an ID can
+// use it. Add real auth before this holds anything sensitive.
+const USER_ID_RE = /^[a-z0-9._-]{3,40}$/;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function normalizeUserId(raw) {
+  return String(raw || "").trim().toLowerCase();
+}
+
+async function ensureUser(userId, displayName) {
+  await pool.query(
+    `INSERT INTO users(id, display_name) VALUES($1,$2)
+     ON CONFLICT (id) DO UPDATE SET last_seen_at = NOW(),
+       display_name = COALESCE(EXCLUDED.display_name, users.display_name)`,
+    [userId, displayName || null]
+  );
+}
+
+// Every data route sits behind this: no user id, no data.
+async function requireUser(req, res, next) {
+  const userId = normalizeUserId(req.header("x-user-id"));
+  if (!userId) {
+    return res.status(401).json({ error: "No user ID sent. Sign in with a user ID first." });
+  }
+  if (!USER_ID_RE.test(userId)) {
+    return res.status(400).json({
+      error: "Invalid user ID. Use 3-40 characters: letters, numbers, dot, dash or underscore.",
+    });
+  }
+  try {
+    await ensureUser(userId);
+    req.userId = userId;
+    next();
+  } catch (err) {
+    console.error("requireUser", err);
+    return sendDbFailure(res, err, "Could not verify the user.");
+  }
+}
+
+// Look a session up *scoped to its owner*. Returns null when the session does
+// not exist OR belongs to somebody else — the caller cannot tell the two
+// apart, which is exactly what we want.
+async function getOwnedSession(sessionId, userId) {
+  if (!UUID_RE.test(String(sessionId || ""))) return null; // avoid a pg cast error on junk input
+  const r = await pool.query("SELECT * FROM study_sessions WHERE id=$1 AND user_id=$2", [
+    sessionId,
+    userId,
+  ]);
+  return r.rows[0] || null;
+}
+
+const NOT_YOURS = { error: "That study session was not found in your account." };
+
+// ---------------------------------------------------------------------------
+// Exam validation
+// ---------------------------------------------------------------------------
+// The JSON schema guarantees the SHAPE of a generated exam, but it cannot
+// guarantee it makes sense. The dangerous case is an MCQ whose correctAnswer
+// is not one of its own options: the student can never match it, is marked
+// wrong, and a bogus "weak concept" gets filed. Repair what we can, drop what
+// we cannot, and never persist a broken question.
+function validateQuestions(rawQuestions) {
+  const kept = [];
+  const dropped = [];
+
+  for (const q of rawQuestions || []) {
+    const question = String(q.question || "").trim();
+    const correct = String(q.correctAnswer ?? "").trim();
+    const type = q.type === "mcq" ? "mcq" : "short";
+
+    if (!question || !correct) {
+      dropped.push({ question: question || "(blank)", reason: "missing question or answer" });
+      continue;
+    }
+
+    if (type === "short") {
+      kept.push({ ...q, type, question, correctAnswer: correct, options: [] });
+      continue;
+    }
+
+    const options = (q.options || []).map((o) => String(o).trim()).filter(Boolean);
+    if (options.length < 2) {
+      dropped.push({ question, reason: `only ${options.length} option(s)` });
+      continue;
+    }
+
+    // Accept a case/whitespace mismatch by snapping to the real option text,
+    // since that is a formatting slip rather than a wrong answer.
+    const match = options.find((o) => o.toLowerCase() === correct.toLowerCase());
+    if (!match) {
+      dropped.push({ question, reason: "correctAnswer is not one of the options" });
+      continue;
+    }
+
+    kept.push({ ...q, type, question, options, correctAnswer: match });
+  }
+
+  return { kept, dropped };
+}
+
+// Health check
+app.get("/api/health", (_req, res) => res.json({ ok: true, service: "SmartStudy Assistant" }));
+
+// Diagnostic: proves in one request whether the AI provider is reachable and
+// configured, and reports the provider's own error text if it is not.
+// Never returns the key itself — only whether one is present.
+app.get("/api/diag/llm", async (_req, res) => {
+  const model = DEFAULT_MODEL;
+  const keyPresent = Boolean(process.env.OPENROUTER_API_KEY);
+  if (!keyPresent) {
+    return res.status(503).json({
+      ok: false,
+      keyPresent: false,
+      model,
+      error: "OPENROUTER_API_KEY is not set in this environment. Add it in Render -> Environment and redeploy.",
+    });
+  }
+  try {
+    const client = llmClient();
+    const r = await client.chat.completions.create({
+      model,
+      max_tokens: 5,
+      provider: PROVIDER_ROUTING,
+      ...(reasoningFor(model, EFFORT.generate)
+        ? { reasoning: reasoningFor(model, EFFORT.generate) }
+        : {}),
+      messages: [{ role: "user", content: "ping" }],
+    });
+    res.json({
+      ok: true,
+      keyPresent: true,
+      model,
+      modelUsed: r.model || model,
+      // Which host actually served this — the whole point of pinning. If this
+      // is not one of the providers below, routing is not being honoured.
+      servedBy: r.provider || "unknown",
+      routing: PROVIDER_ROUTING,
+      fallbackModel: FALLBACK_MODEL,
+    });
+  } catch (err) {
+    const status = err?.status || err?.response?.status || null;
+    const detail = describeApiError(err);
+    res.status(502).json({
+      ok: false,
+      keyPresent: true,
+      model,
+      upstreamStatus: status,
+      detail,
+      error: explainLlmFailure(status, detail, model),
+    });
+  }
+});
+
+// Diagnostic: says precisely which tables/columns this build needs and the
+// database does not have. Pairs with /api/diag/llm.
+app.get("/api/diag/db", async (_req, res) => {
+  const REQUIRED = {
+    users: ["id", "display_name", "created_at"],
+    study_sessions: ["id", "user_id", "topic"],
+    recall_schedules: ["id", "user_id", "due_at"],
+    questions: ["id", "position", "assessment_id"],
+    explanations: ["session_id", "content"],
+    assessments: ["session_id"],
+    submissions: ["session_id", "score"],
+    weak_concepts: ["session_id", "concept_tag"],
+    reteach_lessons: ["weak_concept_id", "content"],
   };
+  try {
+    const r = await pool.query(
+      "SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = 'public'"
+    );
+    const found = new Map();
+    for (const row of r.rows) {
+      if (!found.has(row.table_name)) found.set(row.table_name, new Set());
+      found.get(row.table_name).add(row.column_name);
+    }
+    const missing = [];
+    for (const [table, columns] of Object.entries(REQUIRED)) {
+      if (!found.has(table)) {
+        missing.push(`table "${table}" is missing entirely`);
+        continue;
+      }
+      for (const col of columns) {
+        if (!found.get(table).has(col)) missing.push(`${table}.${col}`);
+      }
+    }
+    if (missing.length) {
+      return res.status(503).json({ ok: false, missing, error: SCHEMA_HINT });
+    }
+    res.json({ ok: true, message: "Database schema is up to date." });
+  } catch (err) {
+    console.error("diag/db", err);
+    res.status(500).json({ ok: false, error: "Could not reach the database.", detail: err.message });
+  }
+});
 
-  // --------------------------------------------------------------------
-  // Helpers
-  // --------------------------------------------------------------------
-  function escapeHtml(str) {
-    return String(str == null ? "" : str).replace(/[&<>"']/g, function (c) {
-      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+// Sign in: there is no password — supplying an ID claims it. Creates the
+// account on first use.
+app.post("/api/user", async (req, res) => {
+  const userId = normalizeUserId(req.body.userId);
+  if (!USER_ID_RE.test(userId)) {
+    return res.status(400).json({
+      error: "Pick a user ID of 3-40 characters: letters, numbers, dot, dash or underscore.",
     });
   }
-
-  function todayStamp() {
-    return new Date().toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  try {
+    await ensureUser(userId, req.body.displayName);
+    const r = await pool.query("SELECT id, display_name, created_at FROM users WHERE id=$1", [userId]);
+    res.json({ user: r.rows[0] });
+  } catch (err) {
+    console.error("user", err);
+    return sendDbFailure(res, err, "Could not sign in.");
   }
+});
 
-  function daysFromNow(iso) {
-    var diff = Math.ceil((new Date(iso) - new Date()) / 86400000);
-    if (diff <= 0) return "today";
-    if (diff === 1) return "tomorrow";
-    return "in " + diff + " days";
+// The signed-in user's study history, newest first.
+app.get("/api/sessions", requireUser, async (req, res) => {
+  try {
+    const r = await pool.query(
+      `SELECT s.id, s.topic, s.source_type, s.created_at,
+              (SELECT ROUND(sub.score * 100) FROM submissions sub
+                WHERE sub.session_id = s.id ORDER BY sub.created_at DESC LIMIT 1) AS score,
+              (SELECT COUNT(*) FROM weak_concepts wc WHERE wc.session_id = s.id) AS weak_count
+         FROM study_sessions s
+        WHERE s.user_id = $1
+        ORDER BY s.created_at DESC
+        LIMIT 50`,
+      [req.userId]
+    );
+    res.json({ sessions: r.rows });
+  } catch (err) {
+    console.error("sessions", err);
+    return sendDbFailure(res, err, "Failed to load your history");
   }
+});
 
-  async function api(path, options) {
-    options = options || {};
-    var isForm = options.body instanceof FormData;
-    var opts = Object.assign({}, options);
-    if (!isForm) {
-      opts.headers = Object.assign({ "Content-Type": "application/json" }, options.headers || {});
-    }
-    // Identity travels on every request; the server scopes all data to it.
-    if (state.userId) {
-      opts.headers = Object.assign({}, opts.headers || {}, { "X-User-Id": state.userId });
-    }
-    var res = await fetch(path, opts);
-    var data = {};
-    try { data = await res.json(); } catch (e) { /* empty body */ }
-    if (res.status === 401) {
-      // The server no longer accepts this identity — send them back to sign in.
-      signOut();
-      throw new Error(data.error || "Please sign in again.");
-    }
-    if (!res.ok) throw new Error(data.error || "Something went wrong (" + res.status + ")");
-    return data;
+// Start a session from a typed topic
+app.post("/api/session/topic", requireUser, async (req, res) => {
+  try {
+    const topic = String(req.body.topic || "").trim();
+    if (!topic) return res.status(400).json({ error: "Topic is required" });
+    const r = await pool.query(
+      "INSERT INTO study_sessions(user_id, topic, source_type) VALUES($1,$2,'topic') RETURNING id, topic",
+      [req.userId, topic]
+    );
+    res.status(201).json({ sessionId: r.rows[0].id, topic: r.rows[0].topic });
+  } catch (err) {
+    console.error("session/topic", err);
+    return sendDbFailure(res, err, "Failed to create session");
   }
+});
 
-  // ------------------------------------------------------------------
-  // Session / identity
-  // ------------------------------------------------------------------
-  async function signIn(rawId) {
-    var id = String(rawId || "").trim().toLowerCase();
-    if (!/^[a-z0-9._-]{3,40}$/.test(id)) {
-      return showError("Pick an ID of 3-40 characters: letters, numbers, dot, dash or underscore.", "gate");
-    }
+// Start a session from an uploaded PDF
+app.post("/api/session/pdf", requireUser, upload.single("pdf"), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: "PDF file is required" });
+    const pdfParse = require("pdf-parse"); // required lazily to avoid a known load-time bug
+    const buffer = fs.readFileSync(req.file.path);
+    const data = await pdfParse(buffer);
+    const text = String(data.text || "").replace(/\s+/g, " ").trim();
+    if (!text) return res.status(400).json({ error: "Could not read text from that PDF" });
+    const topic = String(req.body.topic || req.file.originalname || "PDF Study Session").trim();
+    const r = await pool.query(
+      "INSERT INTO study_sessions(user_id, topic, source_type, source_text) VALUES($1,$2,'pdf',$3) RETURNING id, topic",
+      [req.userId, topic, text.slice(0, 50000)]
+    );
+    res.status(201).json({ sessionId: r.rows[0].id, topic: r.rows[0].topic });
+  } catch (err) {
+    console.error("session/pdf", err);
+    res.status(500).json({ error: "Failed to process PDF" });
+  } finally {
+    if (req.file?.path) fs.rmSync(req.file.path, { force: true });
+  }
+});
+
+// Generate (or return cached) explanation
+app.post("/api/explanation", requireUser, async (req, res) => {
+  try {
+    const { sessionId } = req.body;
+    if (!sessionId) return res.status(400).json({ error: "sessionId is required" });
+
+    // Ownership first — never serve a cached explanation for someone else's session.
+    const session = await getOwnedSession(sessionId, req.userId);
+    if (!session) return res.status(404).json(NOT_YOURS);
+
+    const cached = await pool.query(
+      "SELECT id, content FROM explanations WHERE session_id=$1 ORDER BY created_at DESC LIMIT 1",
+      [sessionId]
+    );
+    if (cached.rowCount)
+      return res.json({ explanationId: cached.rows[0].id, explanation: cached.rows[0].content });
+
+    const input = session.source_text || session.topic;
+    const explanation = await generateExplanationWithRetry(input);
+    const saved = await pool.query(
+      "INSERT INTO explanations(session_id, content) VALUES($1,$2) RETURNING id, content",
+      [sessionId, explanation]
+    );
+    res.json({ explanationId: saved.rows[0].id, explanation: saved.rows[0].content });
+  } catch (err) {
+    console.error("explanation", err);
+    return sendFailure(res, err, "Failed to generate explanation");
+  }
+});
+
+// Generate an exam for a session
+app.post("/api/assessment", requireUser, async (req, res) => {
+  try {
+    const { sessionId } = req.body;
+    if (!sessionId) return res.status(400).json({ error: "sessionId is required" });
+
+    const session = await getOwnedSession(sessionId, req.userId);
+    if (!session) return res.status(404).json(NOT_YOURS);
+
+    const ex = await pool.query(
+      "SELECT content FROM explanations WHERE session_id=$1 ORDER BY created_at DESC LIMIT 1",
+      [sessionId]
+    );
+    if (!ex.rowCount) return res.status(404).json({ error: "Generate an explanation first" });
+
+    const a = await pool.query("INSERT INTO assessments(session_id) VALUES($1) RETURNING id", [sessionId]);
+    const assessmentId = a.rows[0].id;
+    const scrap = async () => pool.query("DELETE FROM assessments WHERE id=$1", [assessmentId]);
+
+    let generated;
     try {
-      setLoading("Opening your workspace\u2026");
-      state.userId = id;
-      await api("/api/user", { method: "POST", body: JSON.stringify({ userId: id }) });
-      try { localStorage.setItem(USER_KEY, id); } catch (e) { /* private mode */ }
-      resetToEntry();
-      refreshBadgeOnLoad();
-    } catch (e) {
-      state.userId = null;
-      showError(e.message, "gate");
+      generated = await generateJson(PROMPTS.assessment, ex.rows[0].content, {
+        schema: SCHEMAS.assessment,
+        schemaName: "assessment",
+        maxTokens: 4096,
+      });
+    } catch (genErr) {
+      // Don't leave a question-less assessment row behind if generation
+      // never succeeded.
+      await scrap();
+      throw genErr;
     }
-  }
 
-  function signOut() {
-    try { localStorage.removeItem(USER_KEY); } catch (e) { /* ignore */ }
-    Object.assign(state, {
-      userId: null, userInput: "", history: null, screen: "gate", error: null,
-      sessionId: null, topic: "", explanation: null, assessmentId: null,
-      questions: [], answers: {}, submission: null, recallDue: [],
-    });
-    updateBadge(0);
-    render();
-  }
-
-  async function loadHistory() {
-    try {
-      setLoading("Pulling up your history\u2026");
-      var data = await api("/api/sessions");
-      state.history = data.sessions || [];
-      goto("history");
-    } catch (e) { showError(e.message, "entry"); }
-  }
-
-  // Reopen a past session. The explanation is cached server-side, so this is
-  // a database read rather than a fresh generation.
-  async function resumeSession(id, topic) {
-    state.sessionId = id;
-    state.topic = topic || "";
-    await generateExplanation();
-  }
-
-  var NAV_FOR_SCREEN = { entry: "home", recall: "recall", history: "history" };
-
-  // Keeps the persistent chrome (nav + user chip) in step with the view.
-  function renderChrome() {
-    var nav = document.getElementById("main-nav");
-    var userArea = document.getElementById("user-area");
-    var signedIn = !!state.userId;
-
-    if (nav) {
-      nav.hidden = !signedIn;
-      var active = NAV_FOR_SCREEN[state.screen] || null;
-      Array.prototype.forEach.call(nav.querySelectorAll(".nav-tab"), function (tab) {
-        var isActive = tab.dataset.nav === active;
-        tab.classList.toggle("is-active", isActive);
-        if (isActive) tab.setAttribute("aria-current", "page");
-        else tab.removeAttribute("aria-current");
+    // Never persist a question the student cannot possibly answer correctly.
+    const { kept, dropped } = validateQuestions(generated.questions);
+    if (dropped.length) {
+      console.warn(
+        `assessment ${assessmentId}: dropped ${dropped.length} invalid question(s):`,
+        dropped.map((d) => `${d.reason} — "${d.question.slice(0, 60)}"`)
+      );
+    }
+    if (!kept.length) {
+      await scrap();
+      return res.status(502).json({
+        error: "The AI returned an unusable exam. Please try again.",
+        detail: dropped.length ? dropped[0].reason : "no questions generated",
       });
     }
 
-    if (userArea) {
-      userArea.innerHTML = signedIn
-        ? '<div class="user-chip">' +
-            '<span class="avatar" aria-hidden="true">' + escapeHtml(state.userId.charAt(0)) + "</span>" +
-            '<span class="user-name" title="' + escapeHtml(state.userId) + '">' + escapeHtml(state.userId) + "</span>" +
-            '<button class="link-btn" data-action="switch-user" title="Switch user">Switch</button>' +
-          "</div>"
-        : "";
-    }
-  }
-
-  function render() {
-    APP.innerHTML = screenHtml();
-    renderChrome();
-    attachBehaviors();
-  }
-
-  function showError(message, fallbackScreen) {
-    state.error = message;
-    state.screen = fallbackScreen || (state.screen === "loading" ? "entry" : state.screen);
-    render();
-  }
-
-  function setLoading(message) {
-    state.loadingMessage = message;
-    state.error = null;
-    state.screen = "loading";
-    render();
-  }
-
-  function goto(screen, extra) {
-    Object.assign(state, extra || {}, { screen: screen, error: null });
-    render();
-  }
-
-  // --------------------------------------------------------------------
-  // Actions (API calls)
-  // --------------------------------------------------------------------
-  async function startTopicSession() {
-    var topic = state.topicInput.trim();
-    if (!topic) return showError("Type a topic before starting.", "entry");
-    try {
-      setLoading("Opening a new file\u2026");
-      var data = await api("/api/session/topic", { method: "POST", body: JSON.stringify({ topic: topic }) });
-      state.sessionId = data.sessionId;
-      state.topic = data.topic;
-      await generateExplanation();
-    } catch (e) { showError(e.message, "entry"); }
-  }
-
-  async function startPdfSession() {
-    if (!state.pdfFile) return showError("Attach a PDF before starting.", "entry");
-    try {
-      setLoading("Reading the PDF\u2026");
-      var fd = new FormData();
-      fd.append("pdf", state.pdfFile);
-      if (state.topicInput.trim()) fd.append("topic", state.topicInput.trim());
-      var data = await api("/api/session/pdf", { method: "POST", body: fd });
-      state.sessionId = data.sessionId;
-      state.topic = data.topic;
-      await generateExplanation();
-    } catch (e) { showError(e.message, "entry"); }
-  }
-
-  async function generateExplanation() {
-    try {
-      setLoading("Writing the lesson\u2026");
-      var data = await api("/api/explanation", { method: "POST", body: JSON.stringify({ sessionId: state.sessionId }) });
-      state.explanation = data.explanation;
-      goto("explanation");
-    } catch (e) { showError(e.message, "entry"); }
-  }
-
-  async function generateExam() {
-    try {
-      setLoading("Drawing up the exam\u2026");
-      var data = await api("/api/assessment", { method: "POST", body: JSON.stringify({ sessionId: state.sessionId }) });
-      state.assessmentId = data.assessmentId;
-      state.questions = data.questions;
-      state.currentCard = 0;
-      state.answers = {};
-      goto("exam");
-    } catch (e) { showError(e.message, "explanation"); }
-  }
-
-  async function submitExam() {
-    try {
-      setLoading("Grading your answers\u2026");
-      var answers = state.questions.map(function (q) {
-        return { questionId: q.id, answer: state.answers[q.id] || "" };
-      });
-      var data = await api("/api/submit", {
-        method: "POST",
-        body: JSON.stringify({ assessmentId: state.assessmentId, answers: answers }),
-      });
-      state.submission = data;
-      state.openFeedback = {};
-      goto("results");
-    } catch (e) { showError(e.message, "exam"); }
-  }
-
-  async function generateReteach() {
-    try {
-      setLoading("Re-teaching the weak spots\u2026");
-      var data = await api("/api/reteach", { method: "POST", body: JSON.stringify({ sessionId: state.sessionId }) });
-      state.reteachLessons = data.lessons;
-      state.revealedMini = {};
-      goto("reteach");
-    } catch (e) { showError(e.message, "results"); }
-  }
-
-  async function loadRecall() {
-    try {
-      setLoading("Checking what's due\u2026");
-      var data = await api("/api/recall/due");
-      state.recallDue = data.due;
-      state.recallRevealed = {};
-      updateBadge(data.due.length);
-      goto("recall");
-    } catch (e) { showError(e.message, "entry"); }
-  }
-
-  async function reviewRecall(id, quality) {
-    var itemEl = APP.querySelector('[data-recall-id="' + id + '"]');
-    try {
-      var data = await api("/api/recall/" + id + "/review", {
-        method: "POST",
-        body: JSON.stringify({ quality: quality }),
-      });
-      var finish = function () {
-        state.recallDue = state.recallDue.filter(function (d) { return d.id !== id; });
-        updateBadge(state.recallDue.length);
-        render();
-      };
-      if (itemEl && !REDUCE_MOTION) animateToSlot(itemEl, data.recall.interval_days, finish);
-      else finish();
-    } catch (e) { showError(e.message, "recall"); }
-  }
-
-  async function refreshBadgeOnLoad() {
-    try {
-      var data = await api("/api/recall/due");
-      updateBadge(data.due.length);
-    } catch (e) { /* silent — badge is a nicety, not critical */ }
-  }
-
-  function updateBadge(count) {
-    var badge = document.getElementById("due-badge");
-    if (!badge) return;
-    if (count > 0) {
-      badge.hidden = false;
-      badge.classList.remove("visually-hidden");
-      badge.textContent = String(count);
-    } else {
-      badge.hidden = true;
-      badge.classList.add("visually-hidden");
-    }
-  }
-
-  function animateToSlot(itemEl, intervalDays, done) {
-    var track = document.getElementById("box-track");
-    if (!track) return done();
-    var slotIndex = SLOTS.findIndex(function (s) { return intervalDays <= s.days; });
-    if (slotIndex === -1) slotIndex = SLOTS.length - 1;
-    var slotEl = track.children[slotIndex];
-    if (!slotEl) return done();
-
-    var itemRect = itemEl.getBoundingClientRect();
-    var slotRect = slotEl.getBoundingClientRect();
-    var ghost = document.createElement("div");
-    ghost.className = "box-ghost-card";
-    ghost.style.left = itemRect.left + "px";
-    ghost.style.top = itemRect.top + "px";
-    ghost.style.width = Math.min(itemRect.width, 160) + "px";
-    document.body.appendChild(ghost);
-    itemEl.classList.add("is-filing");
-
-    requestAnimationFrame(function () {
-      var dx = slotRect.left + slotRect.width / 2 - itemRect.left - 80;
-      var dy = slotRect.top - itemRect.top;
-      ghost.style.transform = "translate(" + dx + "px," + dy + "px) scale(0.2)";
-      ghost.style.opacity = "0.15";
-    });
-    setTimeout(function () {
-      ghost.remove();
-      slotEl.classList.add("slot-pulse");
-      setTimeout(function () { slotEl.classList.remove("slot-pulse"); }, 500);
-      done();
-    }, 650);
-  }
-
-  function resetToEntry() {
-    Object.assign(state, {
-      screen: "entry", entryMode: "topic", topicInput: "", pdfFile: null, error: null,
-      sessionId: null, topic: "", explanation: null, assessmentId: null, questions: [],
-      currentCard: 0, answers: {}, submission: null, openFeedback: {}, reteachLessons: [],
-      revealedMini: {},
-    });
-    render();
-  }
-
-  // --------------------------------------------------------------------
-  // Templates
-  // --------------------------------------------------------------------
-  function buildStepper(screen) {
-    if (!state.sessionId) return "";
-    var activeKey = screen === "reteach" ? "results" : screen;
-    var idx = STEP_ORDER.indexOf(activeKey);
-    if (idx === -1) return "";
-    return '<div class="stepper">' + STEP_ORDER.map(function (key, i) {
-      var cls = i === idx ? "is-active" : i < idx ? "is-done" : "";
-      return '<span class="step ' + cls + '">' + STEP_LABEL[key] + "</span>";
-    }).join("") + "</div>";
-  }
-
-  function errorHtml() {
-    return state.error ? '<div class="error-banner">' + escapeHtml(state.error) + "</div>" : "";
-  }
-
-  function screenHtml() {
-    return '<div class="view">' + screenInnerHtml() + "</div>";
-  }
-
-  function screenInnerHtml() {
-    if (!state.userId && state.screen !== "loading") return errorHtml() + gateHtml();
-    switch (state.screen) {
-      case "gate": return errorHtml() + gateHtml();
-      case "history": return errorHtml() + historyHtml();
-      case "loading": return loadingHtml();
-      case "explanation": return buildStepper("explanation") + errorHtml() + explanationHtml();
-      case "exam": return buildStepper("exam") + errorHtml() + examHtml();
-      case "results": return buildStepper("results") + errorHtml() + resultsHtml();
-      case "reteach": return buildStepper("reteach") + errorHtml() + reteachHtml();
-      case "recall": return errorHtml() + recallHtml();
-      default: return errorHtml() + entryHtml();
-    }
-  }
-
-  function gateHtml() {
-    return (
-      '<div class="gate">' +
-        '<div class="card">' +
-          '<div class="gate-icon" aria-hidden="true">' +
-            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
-              '<path d="M3 8.5 12 4l9 4.5-9 4.5-9-4.5Z"/><path d="M7 11v5.2c0 .6.3 1.1.9 1.4 1.2.6 2.7 1 4.1 1s2.9-.4 4.1-1c.6-.3.9-.8.9-1.4V11"/>' +
-            "</svg>" +
-          "</div>" +
-          '<div class="card-eyebrow"><span>Sign in</span><span>' + todayStamp() + "</span></div>" +
-          '<h1 class="card-title">Who\u2019s studying?</h1>' +
-          '<p class="card-body">Pick a user ID. Your lessons, results and review queue are kept separately under it, so they stay yours.</p>' +
-          '<label class="field-label" for="user-input">User ID</label>' +
-          '<input class="text-input" id="user-input" type="text" autocomplete="username" spellcheck="false" ' +
-            'placeholder="e.g. imran, sara.k, study-buddy" value="' + escapeHtml(state.userInput) + '" />' +
-          '<p class="hint">3-40 characters \u2014 letters, numbers, dot, dash or underscore. New IDs are created automatically.</p>' +
-          '<div class="notice"><strong>No password.</strong> This separates your data from other people\u2019s, but it does not protect it \u2014 anyone who knows your ID can open it. Don\u2019t store anything sensitive.</div>' +
-          '<div class="btn-row is-end">' +
-            '<button class="btn btn-stamp" data-action="sign-in">Start studying</button>' +
-          "</div>" +
-        "</div>" +
-      "</div>"
-    );
-  }
-
-  function historyHtml() {
-    var rows = state.history || [];
-    return (
-      '<div class="card">' +
-        '<div class="card-eyebrow"><span>History</span><span>' + rows.length + " session" + (rows.length === 1 ? "" : "s") + "</span></div>" +
-        '<h1 class="card-title">Everything you\u2019ve studied</h1>' +
-        (rows.length
-          ? '<div class="history-list">' + rows.map(historyRowHtml).join("") + "</div>"
-          : '<div class="empty-state">No sessions yet. Start one from Home and it will show up here.</div>') +
-        '<div class="btn-row is-end">' +
-          '<button class="btn btn-stamp" data-action="go-entry">New session</button>' +
-        "</div>" +
-      "</div>"
-    );
-  }
-
-  function historyRowHtml(row) {
-    var score = row.score == null ? null : Number(row.score);
-    var cls = score == null ? "is-none" : score >= 80 ? "is-good" : score >= 50 ? "is-mid" : "is-low";
-    var when = new Date(row.created_at).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
-    var weak = Number(row.weak_count || 0);
-    return (
-      '<div class="history-row" data-action="resume-session" data-id="' + escapeHtml(row.id) +
-        '" data-topic="' + escapeHtml(row.topic) + '" role="button" tabindex="0">' +
-        '<div class="history-main">' +
-          '<div class="history-topic">' + escapeHtml(row.topic) + "</div>" +
-          '<div class="history-meta">' + when + " \u00b7 " + (row.source_type === "pdf" ? "PDF" : "Topic") +
-            (weak ? " \u00b7 " + weak + " weak spot" + (weak === 1 ? "" : "s") : "") + "</div>" +
-        "</div>" +
-        '<span class="score-pill ' + cls + '">' + (score == null ? "Not sat" : score + "%") + "</span>" +
-      "</div>"
-    );
-  }
-
-  function entryHtml() {
-    var isTopic = state.entryMode === "topic";
-    return (
-      '<div class="mode-toggle">' +
-        '<button class="mode-tab ' + (isTopic ? "is-active" : "") + '" data-action="entry-mode" data-mode="topic">Type a topic</button>' +
-        '<button class="mode-tab ' + (!isTopic ? "is-active" : "") + '" data-action="entry-mode" data-mode="pdf">Upload a PDF</button>' +
-      "</div>" +
-      '<div class="card">' +
-        '<div class="card-eyebrow"><span>New Session</span><span>' + todayStamp() + "</span></div>" +
-        '<h1 class="card-title">What are we studying?</h1>' +
-        (isTopic ? entryTopicHtml() : entryPdfHtml()) +
-        '<div class="btn-row is-end">' +
-          '<button class="btn btn-stamp" data-action="' + (isTopic ? "start-topic" : "start-pdf") + '">Start studying</button>' +
-        "</div>" +
-      "</div>"
-    );
-  }
-
-  function entryTopicHtml() {
-    return (
-      '<label class="field-label" for="topic-input">Topic</label>' +
-      '<input class="text-input" id="topic-input" type="text" placeholder="e.g. Photosynthesis, the French Revolution, Big-O notation\u2026" value="' +
-      escapeHtml(state.topicInput) + '" />'
-    );
-  }
-
-  function entryPdfHtml() {
-    var fileName = state.pdfFile ? state.pdfFile.name : null;
-    return (
-      '<div class="dropzone ' + (state.isDragging ? "is-drag" : "") + '" data-action="trigger-file" tabindex="0" role="button" aria-label="Attach a PDF">' +
-        (fileName
-          ? '<span class="file-chip">' + escapeHtml(fileName) + "</span>"
-          : "<strong>Click to attach</strong>, or drag a PDF here") +
-      "</div>" +
-      '<input type="file" id="pdf-file-input" accept="application/pdf" class="visually-hidden" />' +
-      '<label class="field-label" style="margin-top:1rem" for="topic-input">Name it (optional)</label>' +
-      '<input class="text-input" id="topic-input" type="text" placeholder="Leave blank to use the file name" value="' +
-      escapeHtml(state.topicInput) + '" />'
-    );
-  }
-
-  function loadingHtml() {
-    return (
-      '<div class="card card-flat loading-card">' +
-        '<div class="stamp-spinner" aria-hidden="true"></div>' +
-        '<span class="loading-text">' + escapeHtml(state.loadingMessage) + "</span>" +
-      "</div>"
-    );
-  }
-
-  function explanationHtml() {
-    var ex = state.explanation || {};
-    return (
-      '<div class="card">' +
-        '<div class="card-eyebrow"><span>' + escapeHtml(state.topic) + '</span><span>Lesson</span></div>' +
-        '<h1 class="card-title">' + escapeHtml(ex.title || state.topic) + "</h1>" +
-        '<div class="card-body"><p>' + escapeHtml(ex.overview || "") + "</p></div>" +
-        (ex.examples && ex.examples.length
-          ? '<div class="section-heading">Examples</div><ul class="example-list">' +
-            ex.examples.map(function (e) { return "<li>" + escapeHtml(e) + "</li>"; }).join("") + "</ul>"
-          : "") +
-        (ex.commonMistakes && ex.commonMistakes.length
-          ? '<div class="section-heading">Common mistakes</div><ul class="mistake-list">' +
-            ex.commonMistakes.map(function (m) { return "<li>" + escapeHtml(m) + "</li>"; }).join("") + "</ul>"
-          : "") +
-        (ex.summary ? '<div class="section-heading">Summary</div><div class="card-body"><p>' + escapeHtml(ex.summary) + "</p></div>" : "") +
-        '<div class="btn-row is-end">' +
-          '<button class="btn btn-ghost" data-action="go-entry">Study something new</button>' +
-          '<button class="btn btn-stamp" data-action="start-exam">Take the exam</button>' +
-        "</div>" +
-      "</div>"
-    );
-  }
-
-  function examHtml() {
-    var qs = state.questions;
-    var i = state.currentCard;
-    var q = qs[i];
-    if (!q) return '<div class="card"><p class="card-body">No questions loaded.</p></div>';
-    var answered = qs.map(function (qq) { return !!(state.answers[qq.id] && String(state.answers[qq.id]).trim()); });
-    var isLast = i === qs.length - 1;
-
-    var body;
-    if (q.question_type === "mcq") {
-      var opts = q.options || [];
-      var letters = "ABCDEFGH";
-      body = '<ul class="option-list">' + opts.map(function (opt, idx) {
-        var checked = state.answers[q.id] === opt;
-        var inputId = "opt-" + q.id + "-" + idx;
-        return (
-          '<li class="option-row">' +
-            '<input type="radio" name="q-' + q.id + '" id="' + inputId + '" value="' + escapeHtml(opt) + '" ' +
-              (checked ? "checked" : "") + ' data-action="select-mcq" data-qid="' + q.id + '" />' +
-            '<label class="option-label ' + (checked ? "is-checked" : "") + '" for="' + inputId + '">' +
-              '<span class="option-letter">' + letters[idx] + "</span><span>" + escapeHtml(opt) + "</span>" +
-            "</label>" +
-          "</li>"
-        );
-      }).join("") + "</ul>";
-    } else {
-      body = '<textarea class="text-input" id="short-answer-input" data-qid="' + q.id + '" rows="4" placeholder="Write your answer\u2026">' +
-        escapeHtml(state.answers[q.id] || "") + "</textarea>";
+    // position keeps the exam in a deterministic order. created_at ties are
+    // possible when rows are inserted in a tight loop, which used to let the
+    // question order shuffle between reads.
+    for (let i = 0; i < kept.length; i++) {
+      const q = kept[i];
+      await pool.query(
+        `INSERT INTO questions(assessment_id, position, question_type, question_text, options, correct_answer, concept_tag, explanation)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [
+          assessmentId,
+          i,
+          q.type,
+          q.question,
+          q.options && q.options.length ? JSON.stringify(q.options) : null,
+          q.correctAnswer,
+          q.conceptTag || "General",
+          q.explanation || "",
+        ]
+      );
     }
 
-    return (
-      '<div class="exam-progress">' +
-        '<span class="exam-counter">QUESTION ' + (i + 1) + " / " + qs.length + "</span>" +
-        '<div class="exam-dots">' + qs.map(function (_, idx) {
-          var cls = idx === i ? "is-current" : answered[idx] ? "is-answered" : "";
-          return '<button class="exam-dot ' + cls + '" data-action="exam-goto" data-index="' + idx + '" aria-label="Question ' + (idx + 1) + '"></button>';
-        }).join("") + "</div>" +
-      "</div>" +
-      '<div class="card">' +
-        '<div class="card-eyebrow"><span>' + (q.question_type === "mcq" ? "Multiple choice" : "Short answer") + '</span></div>' +
-        '<h1 class="card-title">' + escapeHtml(q.question_text) + "</h1>" +
-        body +
-        '<div class="btn-row">' +
-          '<button class="btn btn-ghost" data-action="exam-prev" ' + (i === 0 ? "disabled" : "") + '>Back</button>' +
-          (isLast
-            ? '<button class="btn btn-stamp" data-action="exam-submit">Submit exam</button>'
-            : '<button class="btn btn-stamp" data-action="exam-next">Next card</button>') +
-        "</div>" +
-      "</div>"
+    const questions = await pool.query(
+      "SELECT id, question_type, question_text, options FROM questions WHERE assessment_id=$1 ORDER BY position",
+      [assessmentId]
     );
+    res.status(201).json({ assessmentId, questions: questions.rows, droppedQuestions: dropped.length });
+  } catch (err) {
+    console.error("assessment", err);
+    return sendFailure(res, err, "Failed to generate exam");
   }
+});
 
-  function groupConcepts(sub) {
-    var order = [];
-    var byTag = {};
-    (sub.graded || []).forEach(function (g) {
-      if (!byTag[g.conceptTag]) { byTag[g.conceptTag] = { tag: g.conceptTag, items: [] }; order.push(g.conceptTag); }
-      byTag[g.conceptTag].items.push(g);
-    });
-    var weakByTag = {};
-    (sub.weakConcepts || []).forEach(function (w) { weakByTag[w.conceptTag] = w; });
-    return order.map(function (tag) {
-      return Object.assign({}, byTag[tag], { weak: weakByTag[tag] || null });
-    });
-  }
 
-  function resultsHtml() {
-    var sub = state.submission;
-    if (!sub) return "";
-    var score = sub.score;
-    var scoreClass = score >= 80 ? "is-good" : score >= 50 ? "is-mid" : "";
-    var concepts = groupConcepts(sub);
-    var hasWeak = (sub.weakConcepts || []).length > 0;
+// Submit answers -> grade, diagnose weak concepts, schedule spaced recall
+app.post("/api/submit", requireUser, async (req, res) => {
+  try {
+    const { assessmentId, answers = [] } = req.body;
+    if (!assessmentId) return res.status(400).json({ error: "assessmentId is required" });
+    if (!UUID_RE.test(String(assessmentId))) return res.status(404).json({ error: "Exam not found" });
 
-    return (
-      '<div class="card">' +
-        '<div class="card-eyebrow"><span>' + escapeHtml(state.topic) + '</span><span>Results</span></div>' +
-        '<div class="score-ring ' + scoreClass + '" style="--pct:' + score + '">' +
-          '<div class="score-ring-inner"><span class="score-value">' + score + "%</span></div>" +
-        "</div>" +
-        '<p class="score-caption">' + (
-          hasWeak ? sub.weakConcepts.length + " sub-concept" + (sub.weakConcepts.length > 1 ? "s" : "") + " flagged for review below."
-                   : "Every sub-concept tested came back clean \u2014 nicely done."
-        ) + "</p>" +
-        '<div class="section-heading">By sub-concept</div>' +
-        '<div class="concept-grid">' + concepts.map(function (c) {
-          if (c.weak) {
-            var cls = c.weak.severity === "high" ? "high" : "medium";
-            return '<div class="concept-row"><span class="concept-name">' + escapeHtml(c.tag) + '</span>' +
-              '<span class="tag-stamp ' + cls + '">' + (cls === "high" ? "Review soon" : "Review") + "</span></div>";
+    // Joining through to study_sessions.user_id is what stops one user from
+    // grading (and polluting the recall queue of) another user's exam.
+    const qRows = await pool.query(
+      `SELECT q.*, a.session_id FROM questions q
+         JOIN assessments a ON a.id = q.assessment_id
+         JOIN study_sessions s ON s.id = a.session_id
+        WHERE q.assessment_id = $1 AND s.user_id = $2
+        ORDER BY q.position`,
+      [assessmentId, req.userId]
+    );
+    if (!qRows.rowCount) return res.status(404).json({ error: "Exam not found in your account" });
+
+    const answerMap = new Map(answers.map((x) => [x.questionId, String(x.answer || "").trim()]));
+    const graded = [];
+
+    for (const q of qRows.rows) {
+      const studentAnswer = answerMap.get(q.id) || "";
+      let result;
+      if (q.question_type === "mcq") {
+        const correct = studentAnswer.toLowerCase() === String(q.correct_answer).trim().toLowerCase();
+        result = {
+          score: correct ? 1 : 0,
+          isCorrect: correct,
+          feedback: correct ? "Correct." : `Correct answer: ${q.correct_answer}`,
+        };
+      } else {
+        result = await generateJson(
+          PROMPTS.grading,
+          { question: q.question_text, correctAnswer: q.correct_answer, studentAnswer },
+          {
+            schema: SCHEMAS.grading,
+            schemaName: "grading",
+            // Judging a free-text answer is the one call where thinking pays
+            // for itself — and at ~40 output tokens it costs almost nothing.
+            effort: EFFORT.grade,
+            maxTokens: 800,
           }
-          return '<div class="concept-row"><span class="concept-name">' + escapeHtml(c.tag) + '</span>' +
-            '<span class="tag-stamp filed">Mastered</span></div>';
-        }).join("") + "</div>" +
-        '<div class="section-heading">Question-by-question</div>' +
-        '<div class="feedback-list">' + (sub.graded || []).map(function (g, i) {
-          var open = !!state.openFeedback[i];
-          return (
-            '<div class="feedback-item">' +
-              '<button class="feedback-toggle" data-action="toggle-feedback" data-index="' + i + '">' +
-                '<span><span class="feedback-icon ' + (g.isCorrect ? "correct" : "incorrect") + '">' + (g.isCorrect ? "\u2713" : "\u2717") + "</span> " +
-                escapeHtml(g.question) + "</span>" +
-                '<span>' + (open ? "\u2212" : "+") + "</span>" +
-              "</button>" +
-              (open
-                ? '<div class="feedback-detail">' +
-                    "<p><strong>Your answer:</strong> " + escapeHtml(g.studentAnswer || "(blank)") + "</p>" +
-                    "<p><strong>Correct answer:</strong> " + escapeHtml(g.correctAnswer) + "</p>" +
-                    "<p><strong>Feedback:</strong> " + escapeHtml(g.feedback) + "</p>" +
-                  "</div>"
-                : "") +
-            "</div>"
-          );
-        }).join("") + "</div>" +
-        '<div class="btn-row is-end">' +
-          '<button class="btn btn-ghost" data-action="go-entry">Study something new</button>' +
-          (hasWeak ? '<button class="btn btn-stamp" data-action="go-reteach">Re-teach my weak areas</button>' : "") +
-        "</div>" +
-      "</div>"
-    );
-  }
-
-  function reteachHtml() {
-    var lessons = state.reteachLessons || [];
-    return (
-      '<div class="card">' +
-        '<div class="card-eyebrow"><span>' + escapeHtml(state.topic) + '</span><span>Re-teach</span></div>' +
-        '<h1 class="card-title">Targeted review</h1>' +
-        lessons.map(function (l, i) {
-          var revealed = !!state.revealedMini[i];
-          return (
-            '<div class="reteach-block">' +
-              '<div class="section-heading">' + escapeHtml(l.concept || "Concept") + "</div>" +
-              '<div class="card-body"><p>' + escapeHtml(l.explanation) + "</p></div>" +
-              (l.example ? '<div class="section-heading">Example</div><div class="card-body"><p>' + escapeHtml(l.example) + "</p></div>" : "") +
-              '<div class="mini-question">' +
-                "<strong>Quick check:</strong> " + escapeHtml(l.miniQuestion) +
-                (revealed
-                  ? '<div class="mini-answer">' + escapeHtml(l.miniAnswer) + "</div>"
-                  : '<div class="btn-row"><button class="btn btn-ghost" data-action="reveal-mini" data-index="' + i + '">Reveal answer</button></div>') +
-              "</div>" +
-            "</div>"
-          );
-        }).join("") +
-        '<div class="btn-row is-end">' +
-          '<button class="btn btn-ghost" data-action="go-results">Back to results</button>' +
-          '<button class="btn btn-stamp" data-action="go-recall">Check the review queue</button>' +
-        "</div>" +
-      "</div>"
-    );
-  }
-
-  function recallHtml() {
-    var due = state.recallDue || [];
-    return (
-      '<div class="card">' +
-        '<div class="card-eyebrow"><span>Review queue</span><span>' + due.length + " due</span></div>" +
-        '<h1 class="card-title">' + (due.length ? "Due for review" : "All caught up") + "</h1>" +
-        (due.length
-          ? due.map(function (item) { return recallItemHtml(item); }).join("")
-          : '<div class="empty-state">Nothing\u2019s due right now \u2014 the first review after an exam lands 1\u20132 days out. Come back then.</div>') +
-        (due.length ? boxTrackHtml() : "") +
-        '<div class="btn-row is-end"><button class="btn btn-ghost" data-action="go-entry">Study something new</button></div>' +
-      "</div>"
-    );
-  }
-
-  function recallItemHtml(item) {
-    var revealed = !!state.recallRevealed[item.id];
-    var reteach = item.reteach;
-    return (
-      '<div class="reteach-block recall-item" data-recall-id="' + item.id + '">' +
-        '<div class="section-heading">' + escapeHtml(item.concept_tag) + " \u2014 due " + daysFromNow(item.due_at) + "</div>" +
-        '<div class="card-body"><p>' + escapeHtml(item.diagnosis) + "</p></div>" +
-        (reteach
-          ? (revealed
-              ? '<div class="recall-refresher"><strong>' + escapeHtml(reteach.miniQuestion || "") + "</strong><div class=\"mini-answer\">" + escapeHtml(reteach.miniAnswer || "") + "</div></div>"
-              : '<div class="btn-row"><button class="btn btn-ghost" data-action="reveal-recall" data-id="' + item.id + '">Show a quick refresher</button></div>')
-          : "") +
-        '<div class="section-heading">How did that go?</div>' +
-        '<div class="quality-row">' +
-          '<button class="btn-quality q-again" data-action="review-recall" data-id="' + item.id + '" data-quality="' + QUALITY.AGAIN + '">Again</button>' +
-          '<button class="btn-quality q-hard" data-action="review-recall" data-id="' + item.id + '" data-quality="' + QUALITY.HARD + '">Hard</button>' +
-          '<button class="btn-quality q-good" data-action="review-recall" data-id="' + item.id + '" data-quality="' + QUALITY.GOOD + '">Good</button>' +
-          '<button class="btn-quality q-easy" data-action="review-recall" data-id="' + item.id + '" data-quality="' + QUALITY.EASY + '">Easy</button>' +
-        "</div>" +
-      "</div>"
-    );
-  }
-
-  function boxTrackHtml() {
-    return '<div class="box-track" id="box-track">' + SLOTS.map(function (s) {
-      return '<div class="box-slot">' + s.label + "</div>";
-    }).join("") + "</div>";
-  }
-
-  // --------------------------------------------------------------------
-  // Event wiring
-  // --------------------------------------------------------------------
-  function attachBehaviors() {
-    var userInput = document.getElementById("user-input");
-    if (userInput) {
-      userInput.addEventListener("input", function (e) { state.userInput = e.target.value; });
-      userInput.addEventListener("keydown", function (e) {
-        if (e.key === "Enter") { e.preventDefault(); signIn(state.userInput); }
-      });
-      userInput.focus();
-    }
-
-    var topicInput = document.getElementById("topic-input");
-    if (topicInput) topicInput.addEventListener("input", function (e) { state.topicInput = e.target.value; });
-
-    var shortAnswer = document.getElementById("short-answer-input");
-    if (shortAnswer) {
-      shortAnswer.addEventListener("input", function (e) {
-        state.answers[e.target.dataset.qid] = e.target.value;
-        var dot = APP.querySelector('.exam-dot.is-current');
-        if (dot) dot.classList.toggle("is-answered", !!e.target.value.trim());
-      });
-    }
-
-    var fileInput = document.getElementById("pdf-file-input");
-    if (fileInput) {
-      fileInput.addEventListener("change", function (e) {
-        state.pdfFile = e.target.files[0] || null;
-        render();
-      });
-    }
-
-    var dropzone = APP.querySelector(".dropzone");
-    if (dropzone) {
-      dropzone.addEventListener("dragover", function (e) { e.preventDefault(); dropzone.classList.add("is-drag"); });
-      dropzone.addEventListener("dragleave", function () { dropzone.classList.remove("is-drag"); });
-      dropzone.addEventListener("drop", function (e) {
-        e.preventDefault();
-        dropzone.classList.remove("is-drag");
-        var f = e.dataTransfer.files && e.dataTransfer.files[0];
-        if (f) { state.pdfFile = f; render(); }
-      });
-    }
-  }
-
-  document.addEventListener("click", function (e) {
-    var el = e.target.closest("[data-action]");
-    if (!el) return;
-    var action = el.dataset.action;
-
-    switch (action) {
-      case "entry-mode":
-        state.entryMode = el.dataset.mode;
-        render();
-        break;
-      case "trigger-file": {
-        var input = document.getElementById("pdf-file-input");
-        if (input) input.click();
-        break;
+        );
       }
-      case "start-topic": startTopicSession(); break;
-      case "start-pdf": startPdfSession(); break;
-      case "start-exam": generateExam(); break;
-      case "select-mcq":
-        state.answers[el.dataset.qid] = el.value;
-        render();
-        break;
-      case "exam-prev":
-        state.currentCard = Math.max(0, state.currentCard - 1);
-        render();
-        break;
-      case "exam-next":
-        state.currentCard = Math.min(state.questions.length - 1, state.currentCard + 1);
-        render();
-        break;
-      case "exam-goto":
-        state.currentCard = Number(el.dataset.index);
-        render();
-        break;
-      case "exam-submit": submitExam(); break;
-      case "toggle-feedback": {
-        var idx = el.dataset.index;
-        state.openFeedback[idx] = !state.openFeedback[idx];
-        render();
-        break;
-      }
-      case "go-reteach": generateReteach(); break;
-      case "go-results": goto("results"); break;
-      case "reveal-mini":
-        state.revealedMini[el.dataset.index] = true;
-        render();
-        break;
-      case "reveal-recall":
-        state.recallRevealed[el.dataset.id] = true;
-        render();
-        break;
-      case "review-recall":
-        reviewRecall(el.dataset.id, Number(el.dataset.quality));
-        break;
-      case "go-recall": loadRecall(); break;
-      case "go-entry": resetToEntry(); break;
-
-      // chrome / navigation
-      case "sign-in": signIn(state.userInput); break;
-      case "switch-user": signOut(); break;
-      case "nav-home": if (state.userId) resetToEntry(); break;
-      case "nav-review": if (state.userId) loadRecall(); break;
-      case "nav-history": if (state.userId) loadHistory(); break;
-      case "resume-session": resumeSession(el.dataset.id, el.dataset.topic); break;
-      default: break;
+      graded.push({
+        questionId: q.id,
+        question: q.question_text,
+        conceptTag: q.concept_tag,
+        correctAnswer: q.correct_answer,
+        studentAnswer,
+        ...result,
+      });
     }
-  });
 
-  document.addEventListener("keydown", function (e) {
-    if (e.key !== "Enter" && e.key !== " ") return;
-    var el = e.target.closest("[data-action]");
-    if (!el || el.tagName === "BUTTON" || el.tagName === "A" || el.tagName === "INPUT") return;
-    e.preventDefault();
-    el.click();
-  });
+    const sessionId = qRows.rows[0].session_id;
+    const score = graded.length
+      ? graded.reduce((sum, x) => sum + Number(x.score || 0), 0) / graded.length
+      : 0;
 
-  // --------------------------------------------------------------------
-  // Boot
-  // --------------------------------------------------------------------
-  (function boot() {
-    var saved = null;
-    try { saved = localStorage.getItem(USER_KEY); } catch (e) { /* private mode */ }
-    if (saved && /^[a-z0-9._-]{3,40}$/.test(saved)) {
-      state.userId = saved;
-      state.screen = "entry";
-      render();
-      refreshBadgeOnLoad();
-    } else {
-      state.screen = "gate";
-      render();
+    const sub = await pool.query(
+      "INSERT INTO submissions(assessment_id, session_id, score) VALUES($1,$2,$3) RETURNING id",
+      [assessmentId, sessionId, score]
+    );
+    for (const g of graded) {
+      await pool.query(
+        "INSERT INTO answers(submission_id, question_id, student_answer, is_correct, score, feedback) VALUES($1,$2,$3,$4,$5,$6)",
+        [sub.rows[0].id, g.questionId, g.studentAnswer, g.isCorrect, g.score, g.feedback]
+      );
     }
-  })();
-})();
+
+    // Diagnose + schedule spaced recall
+    const weak = diagnoseWeakConcepts(graded);
+    for (const w of weak) {
+      const savedWeak = await pool.query(
+        "INSERT INTO weak_concepts(session_id, concept_tag, diagnosis, severity) VALUES($1,$2,$3,$4) RETURNING id",
+        [sessionId, w.conceptTag, w.diagnosis, w.severity]
+      );
+      await pool.query(
+        "INSERT INTO recall_schedules(user_id, weak_concept_id, session_id, concept_tag, due_at) VALUES($1,$2,$3,$4,$5)",
+        [req.userId, savedWeak.rows[0].id, sessionId, w.conceptTag, firstDueDate(w.severity)]
+      );
+    }
+
+    res.status(201).json({
+      submissionId: sub.rows[0].id,
+      score: Math.round(score * 100),
+      graded,
+      weakConcepts: weak,
+    });
+  } catch (err) {
+    console.error("submit", err);
+    return sendFailure(res, err, "Failed to grade exam");
+  }
+});
+
+// Generate targeted re-teaching for a session's weak concepts
+app.post("/api/reteach", requireUser, async (req, res) => {
+  try {
+    const { sessionId } = req.body;
+    if (!sessionId) return res.status(400).json({ error: "sessionId is required" });
+
+    const session = await getOwnedSession(sessionId, req.userId);
+    if (!session) return res.status(404).json(NOT_YOURS);
+
+    const weak = await pool.query(
+      "SELECT * FROM weak_concepts WHERE session_id=$1 ORDER BY created_at DESC",
+      [sessionId]
+    );
+
+    // Each concept's re-teach lesson is independent of the others, so
+    // generate them all concurrently instead of one-at-a-time — with N
+    // weak concepts this cuts wall-clock time roughly by a factor of N
+    // instead of paying for each LLM round-trip back to back.
+    const lessons = await Promise.all(
+      weak.rows.map(async (c) => {
+        const existing = await pool.query(
+          "SELECT content FROM reteach_lessons WHERE weak_concept_id=$1 LIMIT 1",
+          [c.id]
+        );
+        if (existing.rowCount) return existing.rows[0].content;
+
+        const lesson = await generateJson(
+          PROMPTS.reteach,
+          { conceptTag: c.concept_tag, diagnosis: c.diagnosis },
+          { schema: SCHEMAS.reteach, schemaName: "reteach", maxTokens: 700 }
+        );
+        await pool.query("INSERT INTO reteach_lessons(weak_concept_id, content) VALUES($1,$2)", [
+          c.id,
+          lesson,
+        ]);
+        return lesson;
+      })
+    );
+
+    res.json({ lessons });
+  } catch (err) {
+    console.error("reteach", err);
+    return sendFailure(res, err, "Failed to generate re-teaching");
+  }
+});
+
+// Spaced-recall items that are due now (with their re-teach mini question for re-testing)
+app.get("/api/recall/due", requireUser, async (req, res) => {
+  try {
+    const due = await pool.query(
+      `SELECT rs.id, rs.concept_tag, rs.due_at, rs.repetitions, rs.interval_days,
+              wc.diagnosis, wc.severity,
+              (SELECT content FROM reteach_lessons WHERE weak_concept_id = wc.id LIMIT 1) AS reteach
+       FROM recall_schedules rs
+       JOIN weak_concepts wc ON wc.id = rs.weak_concept_id
+       WHERE rs.user_id = $1 AND rs.due_at <= NOW()
+       ORDER BY rs.due_at ASC`,
+      [req.userId]
+    );
+    res.json({ due: due.rows });
+  } catch (err) {
+    console.error("recall/due", err);
+    return sendDbFailure(res, err, "Failed to load recall items");
+  }
+});
+
+// Review a recall item -> reschedule with SM-2. body: { quality: 2|3|4|5 }
+app.post("/api/recall/:id/review", requireUser, async (req, res) => {
+  try {
+    const quality = Number(req.body.quality);
+    if (![2, 3, 4, 5].includes(quality))
+      return res.status(400).json({ error: "quality must be 2, 3, 4 or 5" });
+    if (!UUID_RE.test(String(req.params.id)))
+      return res.status(404).json({ error: "Recall item not found" });
+
+    const cur = await pool.query("SELECT * FROM recall_schedules WHERE id=$1 AND user_id=$2", [
+      req.params.id,
+      req.userId,
+    ]);
+    if (!cur.rowCount) return res.status(404).json({ error: "Recall item not found in your account" });
+
+    const next = sm2(cur.rows[0], quality);
+    const updated = await pool.query(
+      `UPDATE recall_schedules
+       SET ease=$1, interval_days=$2, repetitions=$3, due_at=$4, last_reviewed_at=NOW()
+       WHERE id=$5 AND user_id=$6 RETURNING *`,
+      [next.ease, next.interval_days, next.repetitions, next.due_at, req.params.id, req.userId]
+    );
+    res.json({ recall: updated.rows[0] });
+  } catch (err) {
+    console.error("recall/review", err);
+    return sendDbFailure(res, err, "Failed to update recall item");
+  }
+});
+
+// Fallback: serve the single-page UI for any non-API route
+app.get(/^\/(?!api).*/, (_req, res) => {
+  res.sendFile(path.join(__dirname, "public", "index.html"));
+});
+
+app.listen(PORT, () => console.log(`SmartStudy Assistant running on port ${PORT}`));
