@@ -411,7 +411,6 @@
           '<input class="text-input" id="user-input" type="text" autocomplete="username" spellcheck="false" ' +
             'placeholder="e.g. imran, sara.k, study-buddy" value="' + escapeHtml(state.userInput) + '" />' +
           '<p class="hint">3-40 characters \u2014 letters, numbers, dot, dash or underscore. New IDs are created automatically.</p>' +
-          '<div class="notice"><strong>No password.</strong> This separates your data from other people\u2019s, but it does not protect it \u2014 anyone who knows your ID can open it. Don\u2019t store anything sensitive.</div>' +
           '<div class="btn-row is-end">' +
             '<button class="btn btn-stamp" data-action="sign-in">Start studying</button>' +
           "</div>" +
