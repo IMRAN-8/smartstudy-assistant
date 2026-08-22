@@ -43,16 +43,23 @@ function llmClient() {
   if (!process.env.OPENROUTER_API_KEY) throw new Error("Missing OPENROUTER_API_KEY");
   return new OpenAI({
     apiKey: process.env.OPENROUTER_API_KEY,
-    baseURL: "https://openrouter.ai/api/v1",
+    baseURL: process.env.OPENROUTER_BASE_URL || "https://openrouter.ai/api/v1",
   });
 }
 
-// Extract a JSON object from an LLM response even if it is wrapped in text/fences.
-function extractJson(raw) {
-  const cleaned = String(raw || "").replace(/```json/g, "").replace(/```/g, "").trim();
-  const first = cleaned.indexOf("{");
-  const last = cleaned.lastIndexOf("}");
-  return first >= 0 && last > first ? cleaned.slice(first, last + 1) : cleaned;
+// With strict JSON schemas the provider constrains decoding, so the response
+// is already a bare JSON object. This is just a seatbelt for the rare case a
+// fallback provider wraps it in markdown fences.
+function parseJson(raw) {
+  const text = String(raw || "").trim();
+  try {
+    return JSON.parse(text);
+  } catch {
+    const cleaned = text.replace(/```json/g, "").replace(/```/g, "").trim();
+    const first = cleaned.indexOf("{");
+    const last = cleaned.lastIndexOf("}");
+    return JSON.parse(first >= 0 && last > first ? cleaned.slice(first, last + 1) : cleaned);
+  }
 }
 
 function sleep(ms) {
@@ -60,9 +67,41 @@ function sleep(ms) {
 }
 
 // Used if the primary model (LLM_MODEL) keeps failing with a transient
-// error through all its retries — a small, reliably-available model to
-// fall back to so the request still succeeds instead of dying outright.
-const FALLBACK_MODEL = "openai/gpt-4o-mini";
+// error through all its retries — a smaller sibling that speaks the exact
+// same prompts and schemas, so the request still succeeds instead of dying.
+const FALLBACK_MODEL = process.env.FALLBACK_MODEL || "openai/gpt-oss-20b";
+const DEFAULT_MODEL = process.env.LLM_MODEL || "openai/gpt-oss-120b";
+
+// Provider routing. The SAME model runs at wildly different speeds depending
+// on who hosts it — for gpt-oss-120b it ranges from 23 tps to 448 tps, so
+// leaving this to price-based default routing can make a 2s call take 30s.
+//
+// Every provider listed here was checked to support response_format +
+// structured_outputs. Amazon Bedrock and SambaNova are fast but do NOT, so
+// they are deliberately excluded — routing there would silently break JSON
+// mode. require_parameters is the belt-and-braces version of that check: it
+// tells OpenRouter to skip any provider that can't honour the parameters we
+// send, rather than quietly ignoring them.
+const PROVIDER_ROUTING = {
+  order: ["Groq", "Cerebras", "DeepInfra"],
+  allow_fallbacks: true,
+  require_parameters: true,
+};
+
+// gpt-oss models expose a reasoning budget. Schema-shaped generation needs
+// almost none of it, so "low" keeps latency and token spend down. Grading a
+// free-text answer is the one place judgement actually matters.
+const EFFORT = { generate: "low", grade: "medium" };
+
+// Only reasoning-capable models accept a reasoning budget. Sending one to a
+// model that doesn't (e.g. Granite) combined with require_parameters would
+// leave ZERO eligible providers and fail the request — so gate it on the
+// model. Set REASONING_EFFORT=off to disable entirely.
+const REASONING_MODELS = /gpt-oss|gpt-5|o[34]-|gemini-2\.5|qwen3-.*thinking|deepseek-r/i;
+function reasoningFor(model, effort) {
+  if (process.env.REASONING_EFFORT === "off") return undefined;
+  return REASONING_MODELS.test(model) ? { effort } : undefined;
+}
 
 
 // Pull the human-readable reason out of an OpenRouter/OpenAI SDK error.
@@ -91,7 +130,86 @@ function explainLlmFailure(status, detail, model) {
   return `The AI provider call failed${status ? ` (${status})` : ""}: ${detail}`;
 }
 
-async function generateJson(system, user, maxTokens = 1800, attempt = 1, model = process.env.LLM_MODEL || FALLBACK_MODEL) {
+// Strict output schemas. These are what let us stop *asking* for JSON and
+// start *guaranteeing* it — the provider constrains token selection to the
+// shape below, so malformed or reshaped output is no longer a failure mode.
+const SCHEMAS = {
+  explanation: {
+    type: "object",
+    properties: {
+      title: { type: "string" },
+      overview: { type: "string" },
+      examples: { type: "array", items: { type: "string" } },
+      commonMistakes: { type: "array", items: { type: "string" } },
+      summary: { type: "string" },
+    },
+    required: ["title", "overview", "examples", "commonMistakes", "summary"],
+    additionalProperties: false,
+  },
+  assessment: {
+    type: "object",
+    properties: {
+      questions: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            type: { type: "string", enum: ["mcq", "short"] },
+            question: { type: "string" },
+            // Always an array — empty for short-answer. A nullable union here
+            // would be rejected by some providers' schema engines.
+            options: { type: "array", items: { type: "string" } },
+            correctAnswer: { type: "string" },
+            conceptTag: { type: "string" },
+            explanation: { type: "string" },
+          },
+          required: ["type", "question", "options", "correctAnswer", "conceptTag", "explanation"],
+          additionalProperties: false,
+        },
+      },
+    },
+    required: ["questions"],
+    additionalProperties: false,
+  },
+  grading: {
+    type: "object",
+    properties: {
+      score: { type: "number" },
+      isCorrect: { type: "boolean" },
+      feedback: { type: "string" },
+    },
+    required: ["score", "isCorrect", "feedback"],
+    additionalProperties: false,
+  },
+  reteach: {
+    type: "object",
+    properties: {
+      concept: { type: "string" },
+      explanation: { type: "string" },
+      example: { type: "string" },
+      miniQuestion: { type: "string" },
+      miniAnswer: { type: "string" },
+    },
+    required: ["concept", "explanation", "example", "miniQuestion", "miniAnswer"],
+    additionalProperties: false,
+  },
+};
+
+/**
+ * Call the LLM and get back a parsed object matching `schema`.
+ *
+ * opts: { schema, schemaName, maxTokens, effort, model, attempt }
+ */
+async function generateJson(system, user, opts = {}) {
+  const {
+    schema,
+    schemaName = "response",
+    maxTokens = 1800,
+    effort = EFFORT.generate,
+    model = DEFAULT_MODEL,
+    attempt = 1,
+  } = opts;
+
   const client = llmClient();
   let response;
   try {
@@ -99,7 +217,15 @@ async function generateJson(system, user, maxTokens = 1800, attempt = 1, model =
       model,
       temperature: 0.2,
       max_tokens: maxTokens,
-      response_format: { type: "json_object" },
+      // Pin to fast, schema-capable providers instead of taking whatever
+      // price-sorted routing hands us.
+      provider: PROVIDER_ROUTING,
+      // Keep the reasoning budget small for shape-constrained generation.
+      // Omitted entirely for models that don't support it.
+      ...(reasoningFor(model, effort) ? { reasoning: reasoningFor(model, effort) } : {}),
+      response_format: schema
+        ? { type: "json_schema", json_schema: { name: schemaName, strict: true, schema } }
+        : { type: "json_object" },
       messages: [
         { role: "system", content: system },
         { role: "user", content: typeof user === "string" ? user : JSON.stringify(user) },
@@ -118,7 +244,7 @@ async function generateJson(system, user, maxTokens = 1800, attempt = 1, model =
 
     if (isTransient && attempt < 4) {
       await sleep(500 * Math.pow(2, attempt - 1)); // 0.5s, 1s, 2s
-      return generateJson(system, user, maxTokens, attempt + 1, model);
+      return generateJson(system, user, { ...opts, attempt: attempt + 1 });
     }
     // Retries exhausted (or the model itself is unusable). If we weren't
     // already on the fallback, try it once before giving up entirely.
@@ -126,7 +252,7 @@ async function generateJson(system, user, maxTokens = 1800, attempt = 1, model =
       console.warn(
         `generateJson: model "${model}" failed (status ${status}: ${describeApiError(apiErr)}) — falling back to ${FALLBACK_MODEL}`
       );
-      return generateJson(system, user, maxTokens, 1, FALLBACK_MODEL);
+      return generateJson(system, user, { ...opts, model: FALLBACK_MODEL, attempt: 1 });
     }
     // Nothing left to try. Re-throw with the upstream reason attached so the
     // route can log it AND report something actionable to the client.
@@ -139,20 +265,23 @@ async function generateJson(system, user, maxTokens = 1800, attempt = 1, model =
 
   const choice = response.choices?.[0];
   const raw = choice?.message?.content || "";
-  const truncated = choice?.finish_reason === "length";
+
+  // The schema guarantees shape, but it cannot guarantee the response had
+  // room to finish. A hard token cut-off is the one remaining way to get
+  // unparseable output, so retry that case once with more headroom.
+  if (choice?.finish_reason === "length" && attempt === 1) {
+    console.warn(`generateJson: response hit the ${maxTokens}-token ceiling, retrying with more room`);
+    return generateJson(system, user, {
+      ...opts,
+      maxTokens: Math.min(maxTokens * 2, 8000),
+      attempt: attempt + 1,
+    });
+  }
 
   try {
-    return JSON.parse(extractJson(raw));
+    return parseJson(raw);
   } catch (parseErr) {
-    // The model's JSON came back malformed or cut off mid-string. If it was
-    // cut off (finish_reason "length"), give it more room next time; either
-    // way, retry a couple of times before giving up — a fresh sample is
-    // often well-formed even when the last one wasn't.
-    if (attempt < 3) {
-      const nextMaxTokens = truncated ? Math.min(maxTokens * 2, 8000) : maxTokens;
-      return generateJson(system, user, nextMaxTokens, attempt + 1, model);
-    }
-    throw new Error(`LLM did not return valid JSON after ${attempt} attempts: ${parseErr.message}`);
+    throw new Error(`LLM returned unparseable JSON (model ${model}): ${parseErr.message}`);
   }
 }
 
@@ -160,46 +289,44 @@ async function generateJson(system, user, maxTokens = 1800, attempt = 1, model =
 // Prompts
 // ---------------------------------------------------------------------------
 const PROMPTS = {
+  // Note: output shape is enforced by SCHEMAS, not by these prompts. They only
+  // carry teaching intent — what makes the content *good*, not what makes it
+  // parseable.
   explanation:
-    "You are SmartStudy Assistant, an expert teacher writing a concise study guide. Explain the given " +
-    "topic or study material clearly enough that a student could learn the essentials with no other " +
-    "resource — prioritize the most important points over exhaustive coverage, but every sentence must " +
-    "still teach something (no padding or repetition). Respond with a single JSON object and nothing " +
-    'else — no markdown, no code fences, no extra commentary, and do NOT wrap the explanation in a ' +
-    'single "markdown" field. The JSON object must have exactly these top-level keys: ' +
-    '{"title":"short plain-text title","overview":"4-6 plain sentences giving a clear conceptual ' +
-    'introduction — what the topic is, why it matters, and how its pieces relate, no markdown syntax",' +
-    '"examples":["a concrete, worked example explained in enough detail to be instructive on its own, ' +
-    'not just a one-line label"] (2-3 items), ' +
-    '"commonMistakes":["a specific mistake plus a clear explanation of why it\'s wrong and what to do ' +
-    'instead"] (2-3 items), ' +
-    '"summary":"2-3 plain sentences tying the topic together and reinforcing the core takeaway"}. ' +
-    "Do not use #, *, -, or other markdown syntax anywhere inside the string values.",
+    "You are SmartStudy Assistant, an expert teacher writing a concise study guide. Explain the " +
+    "given topic or study material clearly enough that a student could learn the essentials with " +
+    "no other resource — prioritize the most important points over exhaustive coverage, but every " +
+    "sentence must still teach something (no padding or repetition). " +
+    "overview: 4-6 sentences covering what the topic is, why it matters, and how its pieces relate. " +
+    "examples: 2-3 concrete worked examples, each explained in enough detail to be instructive on " +
+    "its own rather than a one-line label. " +
+    "commonMistakes: 2-3 specific mistakes, each with why it is wrong and what to do instead. " +
+    "summary: 2-3 sentences reinforcing the core takeaway. " +
+    "Write plain prose — do not use #, *, -, or other markdown syntax inside any value.",
 
   assessment:
-    "Create an exam from the explanation JSON provided. Return ONLY valid JSON: " +
-    '{"questions":[{"type":"mcq","question":"...","options":["a","b","c","d"],' +
-    '"correctAnswer":"exact text of the correct option","conceptTag":"short sub-concept name",' +
-    '"explanation":"why, in under 12 words"},{"type":"short","question":"...","options":null,' +
-    '"correctAnswer":"model answer, one short sentence","conceptTag":"...",' +
-    '"explanation":"why, in under 12 words"}]}. ' +
-    "Make exactly 5 MCQ and 3 short-answer questions. Each question tests ONE specific sub-concept. " +
-    "For MCQ, correctAnswer MUST be the exact text of one of the options. Keep every field brief — " +
-    "no filler, no restating the question.",
+    "Create an exam from the explanation provided. Make exactly 5 questions of type \"mcq\" and 3 " +
+    "of type \"short\", and each question must test ONE specific sub-concept. " +
+    "For mcq: give exactly 4 options, and correctAnswer MUST be the verbatim text of one of them. " +
+    "Write plausible distractors — wrong options a student who half-understands would actually " +
+    "consider, never obvious throwaways. " +
+    "For short: options must be an empty array, and correctAnswer is a one-sentence model answer. " +
+    "conceptTag is a short sub-concept name. explanation is why the answer is right, under 12 words.",
 
   grading:
-    "You grade a student's short answer fairly. Return ONLY valid JSON: " +
-    '{"score":0.0-1.0,"isCorrect":true/false,"feedback":"one short sentence"}. ' +
-    "isCorrect is true when score >= 0.7.",
+    "You grade a student's short answer fairly. Award credit for correct understanding even when " +
+    "the wording differs from the model answer; do not reward confident restatement of the " +
+    "question. score is 0.0-1.0, isCorrect is true when score >= 0.7, feedback is one short " +
+    "sentence naming the specific gap or confirming what they got right.",
 
   reteach:
-    "Re-teach ONLY the given weak sub-concept to a confused student, briefly. Return ONLY valid JSON: " +
-    '{"concept":"...","explanation":"2-3 sentences: the correct understanding, weaving in the ' +
-    'one likely point of confusion","example":"one short concrete example, one sentence",' +
-    '"miniQuestion":"...","miniAnswer":"one short sentence"}. No filler, no restating the question.',
+    "Re-teach ONLY the given weak sub-concept to a confused student, briefly. " +
+    "explanation: 2-3 sentences giving the correct understanding while addressing the likely point " +
+    "of confusion. example: one short concrete example. miniQuestion + miniAnswer: a single quick " +
+    "check for understanding. No filler, no restating the question.",
 };
 
-// Minimum shape check for an explanation object before we trust and save it.
+// The schema guarantees the keys exist; this only checks they carry content.
 function isValidExplanation(e) {
   return (
     !!e &&
@@ -210,42 +337,39 @@ function isValidExplanation(e) {
   );
 }
 
-// Generate an explanation, and retry once (with a stricter reminder) if the
-// model ignores the requested shape (e.g. returns { markdown: "..." }).
+// Generate an explanation. Shape is now enforced by the JSON schema, so the
+// only thing left to guard against is a technically-valid-but-empty response.
 async function generateExplanationWithRetry(input) {
-  // Remember why the attempts failed. Previously both attempts swallowed the
-  // error and the caller could only say "could not generate", which hid the
-  // actual cause (bad key / no credits / bad model) from the logs and the UI.
+  // Remember why an attempt failed — swallowing this is what previously hid
+  // the actual cause (bad key / no credits / bad model) from logs and UI.
   let lastError = null;
 
-  async function attempt(system) {
+  async function attempt() {
     try {
-      return await generateJson(system, input, 4096);
+      return await generateJson(PROMPTS.explanation, input, {
+        schema: SCHEMAS.explanation,
+        schemaName: "explanation",
+        maxTokens: 4096,
+      });
     } catch (err) {
-      // Covers both network/API errors and JSON.parse failures from a
-      // response that got cut off mid-generation before it was valid JSON.
       lastError = err;
       console.warn("Explanation generation attempt failed:", err.message);
       return null;
     }
   }
 
-  let explanation = await attempt(PROMPTS.explanation);
+  let explanation = await attempt();
   if (!isValidExplanation(explanation)) {
-    console.warn("Explanation missing required keys or invalid, retrying:", explanation);
-    explanation = await attempt(
-      PROMPTS.explanation +
-        " Your previous response was invalid or incomplete — respond again using exactly the keys " +
-        "title, overview, examples, commonMistakes, summary, with no other keys, and make " +
-        "sure the JSON is complete and properly closed with no truncation."
-    );
+    console.warn("Explanation came back empty, retrying once");
+    explanation = await attempt();
   }
   if (!isValidExplanation(explanation)) {
     if (lastError) throw lastError; // real upstream reason beats a generic message
-    throw new Error("The AI returned a malformed explanation twice in a row. Try again, or switch LLM_MODEL to a stronger model.");
+    throw new Error("The AI returned an empty explanation twice in a row. Try again, or switch LLM_MODEL to a stronger model.");
   }
   return explanation;
 }
+
 
 // ---------------------------------------------------------------------------
 // Diagnosis + spaced-recall (SM-2) logic
@@ -304,6 +428,7 @@ function sm2(prev, quality) {
 // Send a failure response that keeps the actionable reason instead of
 // flattening every problem into one generic string.
 function sendFailure(res, err, fallbackMessage) {
+  if (isSchemaError(err)) return sendDbFailure(res, err, fallbackMessage);
   const message = err?.userMessage || fallbackMessage;
   const body = { error: message };
   if (err?.llmStatus) body.upstreamStatus = err.llmStatus;
@@ -317,6 +442,135 @@ function sendFailure(res, err, fallbackMessage) {
 // Routes
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Schema drift
+// ---------------------------------------------------------------------------
+// Deploying code before running the matching schema.sql is the single easiest
+// way to break this app, and Postgres reports it with a precise error code.
+// Surface that as an instruction instead of a generic 500.
+const SCHEMA_ERROR_CODES = new Set(["42P01", "42703"]); // undefined_table, undefined_column
+const SCHEMA_HINT =
+  "The database is missing tables or columns this version needs. Run the latest schema.sql " +
+  "in Supabase -> SQL Editor, then try again. Visit /api/diag/db to see exactly what is missing.";
+
+function isSchemaError(err) {
+  return !!err && SCHEMA_ERROR_CODES.has(err.code);
+}
+
+// Every database catch block goes through here so a migration problem always
+// reports itself the same way, wherever it surfaces first.
+function sendDbFailure(res, err, fallbackMessage) {
+  if (isSchemaError(err)) {
+    return res.status(503).json({ error: SCHEMA_HINT, detail: `${err.code}: ${err.message}` });
+  }
+  return res.status(500).json({ error: fallbackMessage });
+}
+
+// ---------------------------------------------------------------------------
+// Users + ownership
+// ---------------------------------------------------------------------------
+// IMPORTANT: this is identity, NOT authentication. A person types a user ID
+// and owns whatever is filed under it. There is no password, so this
+// SEPARATES users' data — it does not PROTECT it. Anyone who knows an ID can
+// use it. Add real auth before this holds anything sensitive.
+const USER_ID_RE = /^[a-z0-9._-]{3,40}$/;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function normalizeUserId(raw) {
+  return String(raw || "").trim().toLowerCase();
+}
+
+async function ensureUser(userId, displayName) {
+  await pool.query(
+    `INSERT INTO users(id, display_name) VALUES($1,$2)
+     ON CONFLICT (id) DO UPDATE SET last_seen_at = NOW(),
+       display_name = COALESCE(EXCLUDED.display_name, users.display_name)`,
+    [userId, displayName || null]
+  );
+}
+
+// Every data route sits behind this: no user id, no data.
+async function requireUser(req, res, next) {
+  const userId = normalizeUserId(req.header("x-user-id"));
+  if (!userId) {
+    return res.status(401).json({ error: "No user ID sent. Sign in with a user ID first." });
+  }
+  if (!USER_ID_RE.test(userId)) {
+    return res.status(400).json({
+      error: "Invalid user ID. Use 3-40 characters: letters, numbers, dot, dash or underscore.",
+    });
+  }
+  try {
+    await ensureUser(userId);
+    req.userId = userId;
+    next();
+  } catch (err) {
+    console.error("requireUser", err);
+    return sendDbFailure(res, err, "Could not verify the user.");
+  }
+}
+
+// Look a session up *scoped to its owner*. Returns null when the session does
+// not exist OR belongs to somebody else — the caller cannot tell the two
+// apart, which is exactly what we want.
+async function getOwnedSession(sessionId, userId) {
+  if (!UUID_RE.test(String(sessionId || ""))) return null; // avoid a pg cast error on junk input
+  const r = await pool.query("SELECT * FROM study_sessions WHERE id=$1 AND user_id=$2", [
+    sessionId,
+    userId,
+  ]);
+  return r.rows[0] || null;
+}
+
+const NOT_YOURS = { error: "That study session was not found in your account." };
+
+// ---------------------------------------------------------------------------
+// Exam validation
+// ---------------------------------------------------------------------------
+// The JSON schema guarantees the SHAPE of a generated exam, but it cannot
+// guarantee it makes sense. The dangerous case is an MCQ whose correctAnswer
+// is not one of its own options: the student can never match it, is marked
+// wrong, and a bogus "weak concept" gets filed. Repair what we can, drop what
+// we cannot, and never persist a broken question.
+function validateQuestions(rawQuestions) {
+  const kept = [];
+  const dropped = [];
+
+  for (const q of rawQuestions || []) {
+    const question = String(q.question || "").trim();
+    const correct = String(q.correctAnswer ?? "").trim();
+    const type = q.type === "mcq" ? "mcq" : "short";
+
+    if (!question || !correct) {
+      dropped.push({ question: question || "(blank)", reason: "missing question or answer" });
+      continue;
+    }
+
+    if (type === "short") {
+      kept.push({ ...q, type, question, correctAnswer: correct, options: [] });
+      continue;
+    }
+
+    const options = (q.options || []).map((o) => String(o).trim()).filter(Boolean);
+    if (options.length < 2) {
+      dropped.push({ question, reason: `only ${options.length} option(s)` });
+      continue;
+    }
+
+    // Accept a case/whitespace mismatch by snapping to the real option text,
+    // since that is a formatting slip rather than a wrong answer.
+    const match = options.find((o) => o.toLowerCase() === correct.toLowerCase());
+    if (!match) {
+      dropped.push({ question, reason: "correctAnswer is not one of the options" });
+      continue;
+    }
+
+    kept.push({ ...q, type, question, options, correctAnswer: match });
+  }
+
+  return { kept, dropped };
+}
+
 // Health check
 app.get("/api/health", (_req, res) => res.json({ ok: true, service: "SmartStudy Assistant" }));
 
@@ -324,7 +578,7 @@ app.get("/api/health", (_req, res) => res.json({ ok: true, service: "SmartStudy 
 // configured, and reports the provider's own error text if it is not.
 // Never returns the key itself — only whether one is present.
 app.get("/api/diag/llm", async (_req, res) => {
-  const model = process.env.LLM_MODEL || FALLBACK_MODEL;
+  const model = DEFAULT_MODEL;
   const keyPresent = Boolean(process.env.OPENROUTER_API_KEY);
   if (!keyPresent) {
     return res.status(503).json({
@@ -339,9 +593,23 @@ app.get("/api/diag/llm", async (_req, res) => {
     const r = await client.chat.completions.create({
       model,
       max_tokens: 5,
+      provider: PROVIDER_ROUTING,
+      ...(reasoningFor(model, EFFORT.generate)
+        ? { reasoning: reasoningFor(model, EFFORT.generate) }
+        : {}),
       messages: [{ role: "user", content: "ping" }],
     });
-    res.json({ ok: true, keyPresent: true, model, modelUsed: r.model || model });
+    res.json({
+      ok: true,
+      keyPresent: true,
+      model,
+      modelUsed: r.model || model,
+      // Which host actually served this — the whole point of pinning. If this
+      // is not one of the providers below, routing is not being honoured.
+      servedBy: r.provider || "unknown",
+      routing: PROVIDER_ROUTING,
+      fallbackModel: FALLBACK_MODEL,
+    });
   } catch (err) {
     const status = err?.status || err?.response?.status || null;
     const detail = describeApiError(err);
@@ -356,24 +624,107 @@ app.get("/api/diag/llm", async (_req, res) => {
   }
 });
 
+// Diagnostic: says precisely which tables/columns this build needs and the
+// database does not have. Pairs with /api/diag/llm.
+app.get("/api/diag/db", async (_req, res) => {
+  const REQUIRED = {
+    users: ["id", "display_name", "created_at"],
+    study_sessions: ["id", "user_id", "topic"],
+    recall_schedules: ["id", "user_id", "due_at"],
+    questions: ["id", "position", "assessment_id"],
+    explanations: ["session_id", "content"],
+    assessments: ["session_id"],
+    submissions: ["session_id", "score"],
+    weak_concepts: ["session_id", "concept_tag"],
+    reteach_lessons: ["weak_concept_id", "content"],
+  };
+  try {
+    const r = await pool.query(
+      "SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = 'public'"
+    );
+    const found = new Map();
+    for (const row of r.rows) {
+      if (!found.has(row.table_name)) found.set(row.table_name, new Set());
+      found.get(row.table_name).add(row.column_name);
+    }
+    const missing = [];
+    for (const [table, columns] of Object.entries(REQUIRED)) {
+      if (!found.has(table)) {
+        missing.push(`table "${table}" is missing entirely`);
+        continue;
+      }
+      for (const col of columns) {
+        if (!found.get(table).has(col)) missing.push(`${table}.${col}`);
+      }
+    }
+    if (missing.length) {
+      return res.status(503).json({ ok: false, missing, error: SCHEMA_HINT });
+    }
+    res.json({ ok: true, message: "Database schema is up to date." });
+  } catch (err) {
+    console.error("diag/db", err);
+    res.status(500).json({ ok: false, error: "Could not reach the database.", detail: err.message });
+  }
+});
+
+// Sign in: there is no password — supplying an ID claims it. Creates the
+// account on first use.
+app.post("/api/user", async (req, res) => {
+  const userId = normalizeUserId(req.body.userId);
+  if (!USER_ID_RE.test(userId)) {
+    return res.status(400).json({
+      error: "Pick a user ID of 3-40 characters: letters, numbers, dot, dash or underscore.",
+    });
+  }
+  try {
+    await ensureUser(userId, req.body.displayName);
+    const r = await pool.query("SELECT id, display_name, created_at FROM users WHERE id=$1", [userId]);
+    res.json({ user: r.rows[0] });
+  } catch (err) {
+    console.error("user", err);
+    return sendDbFailure(res, err, "Could not sign in.");
+  }
+});
+
+// The signed-in user's study history, newest first.
+app.get("/api/sessions", requireUser, async (req, res) => {
+  try {
+    const r = await pool.query(
+      `SELECT s.id, s.topic, s.source_type, s.created_at,
+              (SELECT ROUND(sub.score * 100) FROM submissions sub
+                WHERE sub.session_id = s.id ORDER BY sub.created_at DESC LIMIT 1) AS score,
+              (SELECT COUNT(*) FROM weak_concepts wc WHERE wc.session_id = s.id) AS weak_count
+         FROM study_sessions s
+        WHERE s.user_id = $1
+        ORDER BY s.created_at DESC
+        LIMIT 50`,
+      [req.userId]
+    );
+    res.json({ sessions: r.rows });
+  } catch (err) {
+    console.error("sessions", err);
+    return sendDbFailure(res, err, "Failed to load your history");
+  }
+});
+
 // Start a session from a typed topic
-app.post("/api/session/topic", async (req, res) => {
+app.post("/api/session/topic", requireUser, async (req, res) => {
   try {
     const topic = String(req.body.topic || "").trim();
     if (!topic) return res.status(400).json({ error: "Topic is required" });
     const r = await pool.query(
-      "INSERT INTO study_sessions(topic, source_type) VALUES($1,'topic') RETURNING id, topic",
-      [topic]
+      "INSERT INTO study_sessions(user_id, topic, source_type) VALUES($1,$2,'topic') RETURNING id, topic",
+      [req.userId, topic]
     );
     res.status(201).json({ sessionId: r.rows[0].id, topic: r.rows[0].topic });
   } catch (err) {
     console.error("session/topic", err);
-    res.status(500).json({ error: "Failed to create session" });
+    return sendDbFailure(res, err, "Failed to create session");
   }
 });
 
 // Start a session from an uploaded PDF
-app.post("/api/session/pdf", upload.single("pdf"), async (req, res) => {
+app.post("/api/session/pdf", requireUser, upload.single("pdf"), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: "PDF file is required" });
     const pdfParse = require("pdf-parse"); // required lazily to avoid a known load-time bug
@@ -383,8 +734,8 @@ app.post("/api/session/pdf", upload.single("pdf"), async (req, res) => {
     if (!text) return res.status(400).json({ error: "Could not read text from that PDF" });
     const topic = String(req.body.topic || req.file.originalname || "PDF Study Session").trim();
     const r = await pool.query(
-      "INSERT INTO study_sessions(topic, source_type, source_text) VALUES($1,'pdf',$2) RETURNING id, topic",
-      [topic, text.slice(0, 50000)]
+      "INSERT INTO study_sessions(user_id, topic, source_type, source_text) VALUES($1,$2,'pdf',$3) RETURNING id, topic",
+      [req.userId, topic, text.slice(0, 50000)]
     );
     res.status(201).json({ sessionId: r.rows[0].id, topic: r.rows[0].topic });
   } catch (err) {
@@ -396,10 +747,14 @@ app.post("/api/session/pdf", upload.single("pdf"), async (req, res) => {
 });
 
 // Generate (or return cached) explanation
-app.post("/api/explanation", async (req, res) => {
+app.post("/api/explanation", requireUser, async (req, res) => {
   try {
     const { sessionId } = req.body;
     if (!sessionId) return res.status(400).json({ error: "sessionId is required" });
+
+    // Ownership first — never serve a cached explanation for someone else's session.
+    const session = await getOwnedSession(sessionId, req.userId);
+    if (!session) return res.status(404).json(NOT_YOURS);
 
     const cached = await pool.query(
       "SELECT id, content FROM explanations WHERE session_id=$1 ORDER BY created_at DESC LIMIT 1",
@@ -408,10 +763,7 @@ app.post("/api/explanation", async (req, res) => {
     if (cached.rowCount)
       return res.json({ explanationId: cached.rows[0].id, explanation: cached.rows[0].content });
 
-    const s = await pool.query("SELECT topic, source_text FROM study_sessions WHERE id=$1", [sessionId]);
-    if (!s.rowCount) return res.status(404).json({ error: "Session not found" });
-
-    const input = s.rows[0].source_text || s.rows[0].topic;
+    const input = session.source_text || session.topic;
     const explanation = await generateExplanationWithRetry(input);
     const saved = await pool.query(
       "INSERT INTO explanations(session_id, content) VALUES($1,$2) RETURNING id, content",
@@ -425,10 +777,13 @@ app.post("/api/explanation", async (req, res) => {
 });
 
 // Generate an exam for a session
-app.post("/api/assessment", async (req, res) => {
+app.post("/api/assessment", requireUser, async (req, res) => {
   try {
     const { sessionId } = req.body;
     if (!sessionId) return res.status(400).json({ error: "sessionId is required" });
+
+    const session = await getOwnedSession(sessionId, req.userId);
+    if (!session) return res.status(404).json(NOT_YOURS);
 
     const ex = await pool.query(
       "SELECT content FROM explanations WHERE session_id=$1 ORDER BY created_at DESC LIMIT 1",
@@ -438,53 +793,89 @@ app.post("/api/assessment", async (req, res) => {
 
     const a = await pool.query("INSERT INTO assessments(session_id) VALUES($1) RETURNING id", [sessionId]);
     const assessmentId = a.rows[0].id;
+    const scrap = async () => pool.query("DELETE FROM assessments WHERE id=$1", [assessmentId]);
 
     let generated;
     try {
-      generated = await generateJson(PROMPTS.assessment, ex.rows[0].content, 4096);
+      generated = await generateJson(PROMPTS.assessment, ex.rows[0].content, {
+        schema: SCHEMAS.assessment,
+        schemaName: "assessment",
+        maxTokens: 4096,
+      });
     } catch (genErr) {
       // Don't leave a question-less assessment row behind if generation
       // never succeeded.
-      await pool.query("DELETE FROM assessments WHERE id=$1", [assessmentId]);
+      await scrap();
       throw genErr;
     }
-    for (const q of generated.questions || []) {
+
+    // Never persist a question the student cannot possibly answer correctly.
+    const { kept, dropped } = validateQuestions(generated.questions);
+    if (dropped.length) {
+      console.warn(
+        `assessment ${assessmentId}: dropped ${dropped.length} invalid question(s):`,
+        dropped.map((d) => `${d.reason} — "${d.question.slice(0, 60)}"`)
+      );
+    }
+    if (!kept.length) {
+      await scrap();
+      return res.status(502).json({
+        error: "The AI returned an unusable exam. Please try again.",
+        detail: dropped.length ? dropped[0].reason : "no questions generated",
+      });
+    }
+
+    // position keeps the exam in a deterministic order. created_at ties are
+    // possible when rows are inserted in a tight loop, which used to let the
+    // question order shuffle between reads.
+    for (let i = 0; i < kept.length; i++) {
+      const q = kept[i];
       await pool.query(
-        `INSERT INTO questions(assessment_id, question_type, question_text, options, correct_answer, concept_tag, explanation)
-         VALUES($1,$2,$3,$4,$5,$6,$7)`,
+        `INSERT INTO questions(assessment_id, position, question_type, question_text, options, correct_answer, concept_tag, explanation)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,
         [
           assessmentId,
+          i,
           q.type,
           q.question,
-          q.options ? JSON.stringify(q.options) : null,
-          String(q.correctAnswer ?? ""),
+          q.options && q.options.length ? JSON.stringify(q.options) : null,
+          q.correctAnswer,
           q.conceptTag || "General",
           q.explanation || "",
         ]
       );
     }
+
     const questions = await pool.query(
-      "SELECT id, question_type, question_text, options FROM questions WHERE assessment_id=$1 ORDER BY created_at",
+      "SELECT id, question_type, question_text, options FROM questions WHERE assessment_id=$1 ORDER BY position",
       [assessmentId]
     );
-    res.status(201).json({ assessmentId, questions: questions.rows });
+    res.status(201).json({ assessmentId, questions: questions.rows, droppedQuestions: dropped.length });
   } catch (err) {
     console.error("assessment", err);
     return sendFailure(res, err, "Failed to generate exam");
   }
 });
 
+
 // Submit answers -> grade, diagnose weak concepts, schedule spaced recall
-app.post("/api/submit", async (req, res) => {
+app.post("/api/submit", requireUser, async (req, res) => {
   try {
     const { assessmentId, answers = [] } = req.body;
     if (!assessmentId) return res.status(400).json({ error: "assessmentId is required" });
+    if (!UUID_RE.test(String(assessmentId))) return res.status(404).json({ error: "Exam not found" });
 
+    // Joining through to study_sessions.user_id is what stops one user from
+    // grading (and polluting the recall queue of) another user's exam.
     const qRows = await pool.query(
-      "SELECT q.*, a.session_id FROM questions q JOIN assessments a ON a.id=q.assessment_id WHERE q.assessment_id=$1",
-      [assessmentId]
+      `SELECT q.*, a.session_id FROM questions q
+         JOIN assessments a ON a.id = q.assessment_id
+         JOIN study_sessions s ON s.id = a.session_id
+        WHERE q.assessment_id = $1 AND s.user_id = $2
+        ORDER BY q.position`,
+      [assessmentId, req.userId]
     );
-    if (!qRows.rowCount) return res.status(404).json({ error: "Exam not found" });
+    if (!qRows.rowCount) return res.status(404).json({ error: "Exam not found in your account" });
 
     const answerMap = new Map(answers.map((x) => [x.questionId, String(x.answer || "").trim()]));
     const graded = [];
@@ -503,7 +894,14 @@ app.post("/api/submit", async (req, res) => {
         result = await generateJson(
           PROMPTS.grading,
           { question: q.question_text, correctAnswer: q.correct_answer, studentAnswer },
-          400
+          {
+            schema: SCHEMAS.grading,
+            schemaName: "grading",
+            // Judging a free-text answer is the one call where thinking pays
+            // for itself — and at ~40 output tokens it costs almost nothing.
+            effort: EFFORT.grade,
+            maxTokens: 800,
+          }
         );
       }
       graded.push({
@@ -540,8 +938,8 @@ app.post("/api/submit", async (req, res) => {
         [sessionId, w.conceptTag, w.diagnosis, w.severity]
       );
       await pool.query(
-        "INSERT INTO recall_schedules(weak_concept_id, session_id, concept_tag, due_at) VALUES($1,$2,$3,$4)",
-        [savedWeak.rows[0].id, sessionId, w.conceptTag, firstDueDate(w.severity)]
+        "INSERT INTO recall_schedules(user_id, weak_concept_id, session_id, concept_tag, due_at) VALUES($1,$2,$3,$4,$5)",
+        [req.userId, savedWeak.rows[0].id, sessionId, w.conceptTag, firstDueDate(w.severity)]
       );
     }
 
@@ -558,10 +956,13 @@ app.post("/api/submit", async (req, res) => {
 });
 
 // Generate targeted re-teaching for a session's weak concepts
-app.post("/api/reteach", async (req, res) => {
+app.post("/api/reteach", requireUser, async (req, res) => {
   try {
     const { sessionId } = req.body;
     if (!sessionId) return res.status(400).json({ error: "sessionId is required" });
+
+    const session = await getOwnedSession(sessionId, req.userId);
+    if (!session) return res.status(404).json(NOT_YOURS);
 
     const weak = await pool.query(
       "SELECT * FROM weak_concepts WHERE session_id=$1 ORDER BY created_at DESC",
@@ -583,7 +984,7 @@ app.post("/api/reteach", async (req, res) => {
         const lesson = await generateJson(
           PROMPTS.reteach,
           { conceptTag: c.concept_tag, diagnosis: c.diagnosis },
-          700
+          { schema: SCHEMAS.reteach, schemaName: "reteach", maxTokens: 700 }
         );
         await pool.query("INSERT INTO reteach_lessons(weak_concept_id, content) VALUES($1,$2)", [
           c.id,
@@ -601,7 +1002,7 @@ app.post("/api/reteach", async (req, res) => {
 });
 
 // Spaced-recall items that are due now (with their re-teach mini question for re-testing)
-app.get("/api/recall/due", async (_req, res) => {
+app.get("/api/recall/due", requireUser, async (req, res) => {
   try {
     const due = await pool.query(
       `SELECT rs.id, rs.concept_tag, rs.due_at, rs.repetitions, rs.interval_days,
@@ -609,37 +1010,43 @@ app.get("/api/recall/due", async (_req, res) => {
               (SELECT content FROM reteach_lessons WHERE weak_concept_id = wc.id LIMIT 1) AS reteach
        FROM recall_schedules rs
        JOIN weak_concepts wc ON wc.id = rs.weak_concept_id
-       WHERE rs.due_at <= NOW()
-       ORDER BY rs.due_at ASC`
+       WHERE rs.user_id = $1 AND rs.due_at <= NOW()
+       ORDER BY rs.due_at ASC`,
+      [req.userId]
     );
     res.json({ due: due.rows });
   } catch (err) {
     console.error("recall/due", err);
-    res.status(500).json({ error: "Failed to load recall items" });
+    return sendDbFailure(res, err, "Failed to load recall items");
   }
 });
 
 // Review a recall item -> reschedule with SM-2. body: { quality: 2|3|4|5 }
-app.post("/api/recall/:id/review", async (req, res) => {
+app.post("/api/recall/:id/review", requireUser, async (req, res) => {
   try {
     const quality = Number(req.body.quality);
     if (![2, 3, 4, 5].includes(quality))
       return res.status(400).json({ error: "quality must be 2, 3, 4 or 5" });
+    if (!UUID_RE.test(String(req.params.id)))
+      return res.status(404).json({ error: "Recall item not found" });
 
-    const cur = await pool.query("SELECT * FROM recall_schedules WHERE id=$1", [req.params.id]);
-    if (!cur.rowCount) return res.status(404).json({ error: "Recall item not found" });
+    const cur = await pool.query("SELECT * FROM recall_schedules WHERE id=$1 AND user_id=$2", [
+      req.params.id,
+      req.userId,
+    ]);
+    if (!cur.rowCount) return res.status(404).json({ error: "Recall item not found in your account" });
 
     const next = sm2(cur.rows[0], quality);
     const updated = await pool.query(
       `UPDATE recall_schedules
        SET ease=$1, interval_days=$2, repetitions=$3, due_at=$4, last_reviewed_at=NOW()
-       WHERE id=$5 RETURNING *`,
-      [next.ease, next.interval_days, next.repetitions, next.due_at, req.params.id]
+       WHERE id=$5 AND user_id=$6 RETURNING *`,
+      [next.ease, next.interval_days, next.repetitions, next.due_at, req.params.id, req.userId]
     );
     res.json({ recall: updated.rows[0] });
   } catch (err) {
     console.error("recall/review", err);
-    res.status(500).json({ error: "Failed to update recall item" });
+    return sendDbFailure(res, err, "Failed to update recall item");
   }
 });
 

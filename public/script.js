@@ -18,8 +18,13 @@
   var STEP_ORDER = ["explanation", "exam", "results", "recall"];
   var STEP_LABEL = { explanation: "Lesson", exam: "Exam", results: "Results", recall: "Recall" };
 
+  var USER_KEY = "smartstudy.userId";
+
   var state = {
     screen: "entry",
+    userId: null,
+    userInput: "",
+    history: null,
     entryMode: "topic",
     topicInput: "",
     pdfFile: null,
@@ -68,15 +73,104 @@
     if (!isForm) {
       opts.headers = Object.assign({ "Content-Type": "application/json" }, options.headers || {});
     }
+    // Identity travels on every request; the server scopes all data to it.
+    if (state.userId) {
+      opts.headers = Object.assign({}, opts.headers || {}, { "X-User-Id": state.userId });
+    }
     var res = await fetch(path, opts);
     var data = {};
     try { data = await res.json(); } catch (e) { /* empty body */ }
+    if (res.status === 401) {
+      // The server no longer accepts this identity — send them back to sign in.
+      signOut();
+      throw new Error(data.error || "Please sign in again.");
+    }
     if (!res.ok) throw new Error(data.error || "Something went wrong (" + res.status + ")");
     return data;
   }
 
+  // ------------------------------------------------------------------
+  // Session / identity
+  // ------------------------------------------------------------------
+  async function signIn(rawId) {
+    var id = String(rawId || "").trim().toLowerCase();
+    if (!/^[a-z0-9._-]{3,40}$/.test(id)) {
+      return showError("Pick an ID of 3-40 characters: letters, numbers, dot, dash or underscore.", "gate");
+    }
+    try {
+      setLoading("Opening your workspace\u2026");
+      state.userId = id;
+      await api("/api/user", { method: "POST", body: JSON.stringify({ userId: id }) });
+      try { localStorage.setItem(USER_KEY, id); } catch (e) { /* private mode */ }
+      resetToEntry();
+      refreshBadgeOnLoad();
+    } catch (e) {
+      state.userId = null;
+      showError(e.message, "gate");
+    }
+  }
+
+  function signOut() {
+    try { localStorage.removeItem(USER_KEY); } catch (e) { /* ignore */ }
+    Object.assign(state, {
+      userId: null, userInput: "", history: null, screen: "gate", error: null,
+      sessionId: null, topic: "", explanation: null, assessmentId: null,
+      questions: [], answers: {}, submission: null, recallDue: [],
+    });
+    updateBadge(0);
+    render();
+  }
+
+  async function loadHistory() {
+    try {
+      setLoading("Pulling up your history\u2026");
+      var data = await api("/api/sessions");
+      state.history = data.sessions || [];
+      goto("history");
+    } catch (e) { showError(e.message, "entry"); }
+  }
+
+  // Reopen a past session. The explanation is cached server-side, so this is
+  // a database read rather than a fresh generation.
+  async function resumeSession(id, topic) {
+    state.sessionId = id;
+    state.topic = topic || "";
+    await generateExplanation();
+  }
+
+  var NAV_FOR_SCREEN = { entry: "home", recall: "recall", history: "history" };
+
+  // Keeps the persistent chrome (nav + user chip) in step with the view.
+  function renderChrome() {
+    var nav = document.getElementById("main-nav");
+    var userArea = document.getElementById("user-area");
+    var signedIn = !!state.userId;
+
+    if (nav) {
+      nav.hidden = !signedIn;
+      var active = NAV_FOR_SCREEN[state.screen] || null;
+      Array.prototype.forEach.call(nav.querySelectorAll(".nav-tab"), function (tab) {
+        var isActive = tab.dataset.nav === active;
+        tab.classList.toggle("is-active", isActive);
+        if (isActive) tab.setAttribute("aria-current", "page");
+        else tab.removeAttribute("aria-current");
+      });
+    }
+
+    if (userArea) {
+      userArea.innerHTML = signedIn
+        ? '<div class="user-chip">' +
+            '<span class="avatar" aria-hidden="true">' + escapeHtml(state.userId.charAt(0)) + "</span>" +
+            '<span class="user-name" title="' + escapeHtml(state.userId) + '">' + escapeHtml(state.userId) + "</span>" +
+            '<button class="link-btn" data-action="switch-user" title="Switch user">Switch</button>' +
+          "</div>"
+        : "";
+    }
+  }
+
   function render() {
     APP.innerHTML = screenHtml();
+    renderChrome();
     attachBehaviors();
   }
 
@@ -283,7 +377,14 @@
   }
 
   function screenHtml() {
+    return '<div class="view">' + screenInnerHtml() + "</div>";
+  }
+
+  function screenInnerHtml() {
+    if (!state.userId && state.screen !== "loading") return errorHtml() + gateHtml();
     switch (state.screen) {
+      case "gate": return errorHtml() + gateHtml();
+      case "history": return errorHtml() + historyHtml();
       case "loading": return loadingHtml();
       case "explanation": return buildStepper("explanation") + errorHtml() + explanationHtml();
       case "exam": return buildStepper("exam") + errorHtml() + examHtml();
@@ -292,6 +393,64 @@
       case "recall": return errorHtml() + recallHtml();
       default: return errorHtml() + entryHtml();
     }
+  }
+
+  function gateHtml() {
+    return (
+      '<div class="gate">' +
+        '<div class="card">' +
+          '<div class="gate-icon" aria-hidden="true">' +
+            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+              '<path d="M3 8.5 12 4l9 4.5-9 4.5-9-4.5Z"/><path d="M7 11v5.2c0 .6.3 1.1.9 1.4 1.2.6 2.7 1 4.1 1s2.9-.4 4.1-1c.6-.3.9-.8.9-1.4V11"/>' +
+            "</svg>" +
+          "</div>" +
+          '<div class="card-eyebrow"><span>Sign in</span><span>' + todayStamp() + "</span></div>" +
+          '<h1 class="card-title">Who\u2019s studying?</h1>' +
+          '<p class="card-body">Pick a user ID. Your lessons, results and review queue are kept separately under it, so they stay yours.</p>' +
+          '<label class="field-label" for="user-input">User ID</label>' +
+          '<input class="text-input" id="user-input" type="text" autocomplete="username" spellcheck="false" ' +
+            'placeholder="e.g. imran, sara.k, study-buddy" value="' + escapeHtml(state.userInput) + '" />' +
+          '<p class="hint">3-40 characters \u2014 letters, numbers, dot, dash or underscore. New IDs are created automatically.</p>' +
+          '<div class="btn-row is-end">' +
+            '<button class="btn btn-stamp" data-action="sign-in">Start studying</button>' +
+          "</div>" +
+        "</div>" +
+      "</div>"
+    );
+  }
+
+  function historyHtml() {
+    var rows = state.history || [];
+    return (
+      '<div class="card">' +
+        '<div class="card-eyebrow"><span>History</span><span>' + rows.length + " session" + (rows.length === 1 ? "" : "s") + "</span></div>" +
+        '<h1 class="card-title">Everything you\u2019ve studied</h1>' +
+        (rows.length
+          ? '<div class="history-list">' + rows.map(historyRowHtml).join("") + "</div>"
+          : '<div class="empty-state">No sessions yet. Start one from Home and it will show up here.</div>') +
+        '<div class="btn-row is-end">' +
+          '<button class="btn btn-stamp" data-action="go-entry">New session</button>' +
+        "</div>" +
+      "</div>"
+    );
+  }
+
+  function historyRowHtml(row) {
+    var score = row.score == null ? null : Number(row.score);
+    var cls = score == null ? "is-none" : score >= 80 ? "is-good" : score >= 50 ? "is-mid" : "is-low";
+    var when = new Date(row.created_at).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+    var weak = Number(row.weak_count || 0);
+    return (
+      '<div class="history-row" data-action="resume-session" data-id="' + escapeHtml(row.id) +
+        '" data-topic="' + escapeHtml(row.topic) + '" role="button" tabindex="0">' +
+        '<div class="history-main">' +
+          '<div class="history-topic">' + escapeHtml(row.topic) + "</div>" +
+          '<div class="history-meta">' + when + " \u00b7 " + (row.source_type === "pdf" ? "PDF" : "Topic") +
+            (weak ? " \u00b7 " + weak + " weak spot" + (weak === 1 ? "" : "s") : "") + "</div>" +
+        "</div>" +
+        '<span class="score-pill ' + cls + '">' + (score == null ? "Not sat" : score + "%") + "</span>" +
+      "</div>"
+    );
   }
 
   function entryHtml() {
@@ -414,7 +573,7 @@
           '<button class="btn btn-ghost" data-action="exam-prev" ' + (i === 0 ? "disabled" : "") + '>Back</button>' +
           (isLast
             ? '<button class="btn btn-stamp" data-action="exam-submit">Submit exam</button>'
-            : '<button class="btn btn-stamp" data-action="exam-next">Next card</button>') +
+            : '<button class="btn btn-stamp" data-action="exam-next">Next Question</button>') +
         "</div>" +
       "</div>"
     );
@@ -568,6 +727,15 @@
   // Event wiring
   // --------------------------------------------------------------------
   function attachBehaviors() {
+    var userInput = document.getElementById("user-input");
+    if (userInput) {
+      userInput.addEventListener("input", function (e) { state.userInput = e.target.value; });
+      userInput.addEventListener("keydown", function (e) {
+        if (e.key === "Enter") { e.preventDefault(); signIn(state.userInput); }
+      });
+      userInput.focus();
+    }
+
     var topicInput = document.getElementById("topic-input");
     if (topicInput) topicInput.addEventListener("input", function (e) { state.topicInput = e.target.value; });
 
@@ -657,6 +825,14 @@
         break;
       case "go-recall": loadRecall(); break;
       case "go-entry": resetToEntry(); break;
+
+      // chrome / navigation
+      case "sign-in": signIn(state.userInput); break;
+      case "switch-user": signOut(); break;
+      case "nav-home": if (state.userId) resetToEntry(); break;
+      case "nav-review": if (state.userId) loadRecall(); break;
+      case "nav-history": if (state.userId) loadHistory(); break;
+      case "resume-session": resumeSession(el.dataset.id, el.dataset.topic); break;
       default: break;
     }
   });
@@ -672,6 +848,17 @@
   // --------------------------------------------------------------------
   // Boot
   // --------------------------------------------------------------------
-  render();
-  refreshBadgeOnLoad();
+  (function boot() {
+    var saved = null;
+    try { saved = localStorage.getItem(USER_KEY); } catch (e) { /* private mode */ }
+    if (saved && /^[a-z0-9._-]{3,40}$/.test(saved)) {
+      state.userId = saved;
+      state.screen = "entry";
+      render();
+      refreshBadgeOnLoad();
+    } else {
+      state.screen = "gate";
+      render();
+    }
+  })();
 })();
