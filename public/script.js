@@ -5,7 +5,6 @@
   var REDUCE_MOTION = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   var QUALITY = { AGAIN: 2, HARD: 3, GOOD: 4, EASY: 5 };
-  // Human-framed milestones the Leitner box visualizes an interval against.
   var SLOTS = [
     { days: 1, label: "Tomorrow" },
     { days: 2, label: "2 days" },
@@ -18,12 +17,11 @@
   var STEP_ORDER = ["explanation", "exam", "results", "recall"];
   var STEP_LABEL = { explanation: "Lesson", exam: "Exam", results: "Results", recall: "Recall" };
 
-  var USER_KEY = "smartstudy.userId";
-
   var state = {
-    screen: "entry",
+    screen: "gate",
     userId: null,
-    userInput: "",
+    displayName: null,
+    userPhoto: null,
     history: null,
     entryMode: "topic",
     topicInput: "",
@@ -66,22 +64,33 @@
     return "in " + diff + " days";
   }
 
+  // API helper with verified Firebase JWT bearer token
   async function api(path, options) {
     options = options || {};
     var isForm = options.body instanceof FormData;
     var opts = Object.assign({}, options);
     if (!isForm) {
       opts.headers = Object.assign({ "Content-Type": "application/json" }, options.headers || {});
+    } else {
+      opts.headers = Object.assign({}, options.headers || {});
     }
-    // Identity travels on every request; the server scopes all data to it.
-    if (state.userId) {
-      opts.headers = Object.assign({}, opts.headers || {}, { "X-User-Id": state.userId });
+
+    // Attach Google Firebase ID Token
+    if (window.FirebaseAuth && typeof window.FirebaseAuth.getToken === "function") {
+      var token = await window.FirebaseAuth.getToken();
+      if (token) {
+        opts.headers["Authorization"] = "Bearer " + token;
+      }
     }
+
     var res = await fetch(path, opts);
     var data = {};
     try { data = await res.json(); } catch (e) { /* empty body */ }
+
     if (res.status === 401) {
-      // The server no longer accepts this identity — send them back to sign in.
+      if (window.FirebaseAuth && typeof window.FirebaseAuth.signOut === "function") {
+        window.FirebaseAuth.signOut();
+      }
       signOut();
       throw new Error(data.error || "Please sign in again.");
     }
@@ -90,30 +99,11 @@
   }
 
   // ------------------------------------------------------------------
-  // Session / identity
+  // Session / Identity
   // ------------------------------------------------------------------
-  async function signIn(rawId) {
-    var id = String(rawId || "").trim().toLowerCase();
-    if (!/^[a-z0-9._-]{3,40}$/.test(id)) {
-      return showError("Pick an ID of 3-40 characters: letters, numbers, dot, dash or underscore.", "gate");
-    }
-    try {
-      setLoading("Opening your workspace\u2026");
-      state.userId = id;
-      await api("/api/user", { method: "POST", body: JSON.stringify({ userId: id }) });
-      try { localStorage.setItem(USER_KEY, id); } catch (e) { /* private mode */ }
-      resetToEntry();
-      refreshBadgeOnLoad();
-    } catch (e) {
-      state.userId = null;
-      showError(e.message, "gate");
-    }
-  }
-
   function signOut() {
-    try { localStorage.removeItem(USER_KEY); } catch (e) { /* ignore */ }
     Object.assign(state, {
-      userId: null, userInput: "", history: null, screen: "gate", error: null,
+      userId: null, displayName: null, userPhoto: null, history: null, screen: "gate", error: null,
       sessionId: null, topic: "", explanation: null, assessmentId: null,
       questions: [], answers: {}, submission: null, recallDue: [],
     });
@@ -130,8 +120,6 @@
     } catch (e) { showError(e.message, "entry"); }
   }
 
-  // Reopen a past session. The explanation is cached server-side, so this is
-  // a database read rather than a fresh generation.
   async function resumeSession(id, topic) {
     state.sessionId = id;
     state.topic = topic || "";
@@ -140,7 +128,6 @@
 
   var NAV_FOR_SCREEN = { entry: "home", recall: "recall", history: "history" };
 
-  // Keeps the persistent chrome (nav + user chip) in step with the view.
   function renderChrome() {
     var nav = document.getElementById("main-nav");
     var userArea = document.getElementById("user-area");
@@ -158,11 +145,15 @@
     }
 
     if (userArea) {
+      var displayName = state.displayName || "Student";
+      var initial = (displayName.charAt(0) || "S").toUpperCase();
       userArea.innerHTML = signedIn
         ? '<div class="user-chip">' +
-            '<span class="avatar" aria-hidden="true">' + escapeHtml(state.userId.charAt(0)) + "</span>" +
-            '<span class="user-name" title="' + escapeHtml(state.userId) + '">' + escapeHtml(state.userId) + "</span>" +
-            '<button class="link-btn" data-action="switch-user" title="Switch user">Switch</button>' +
+            (state.userPhoto
+              ? '<img class="avatar" src="' + escapeHtml(state.userPhoto) + '" alt="" style="object-fit:cover;" />'
+              : '<span class="avatar" aria-hidden="true">' + escapeHtml(initial) + "</span>") +
+            '<span class="user-name" title="' + escapeHtml(displayName) + '">' + escapeHtml(displayName) + "</span>" +
+            '<button class="link-btn" data-action="switch-user" title="Sign out">Sign out</button>' +
           "</div>"
         : "";
     }
@@ -300,7 +291,7 @@
     try {
       var data = await api("/api/recall/due");
       updateBadge(data.due.length);
-    } catch (e) { /* silent — badge is a nicety, not critical */ }
+    } catch (e) { /* silent on badge error */ }
   }
 
   function updateBadge(count) {
@@ -395,6 +386,7 @@
     }
   }
 
+  // Google Sign-In Gate
   function gateHtml() {
     return (
       '<div class="gate">' +
@@ -404,15 +396,19 @@
               '<path d="M3 8.5 12 4l9 4.5-9 4.5-9-4.5Z"/><path d="M7 11v5.2c0 .6.3 1.1.9 1.4 1.2.6 2.7 1 4.1 1s2.9-.4 4.1-1c.6-.3.9-.8.9-1.4V11"/>' +
             "</svg>" +
           "</div>" +
-          '<div class="card-eyebrow"><span>Sign in</span><span>' + todayStamp() + "</span></div>" +
-          '<h1 class="card-title">Who\u2019s studying?</h1>' +
-          '<p class="card-body">Pick a user ID. Your lessons, results and review queue are kept separately under it, so they stay yours.</p>' +
-          '<label class="field-label" for="user-input">User ID</label>' +
-          '<input class="text-input" id="user-input" type="text" autocomplete="username" spellcheck="false" ' +
-            'placeholder="e.g. imran, sara.k, study-buddy" value="' + escapeHtml(state.userInput) + '" />' +
-          '<p class="hint">3-40 characters \u2014 letters, numbers, dot, dash or underscore. New IDs are created automatically.</p>' +
-          '<div class="btn-row is-end">' +
-            '<button class="btn btn-stamp" data-action="sign-in">Start studying</button>' +
+          '<div class="card-eyebrow"><span>Secure Sign In</span><span>' + todayStamp() + "</span></div>" +
+          '<h1 class="card-title">Welcome to SmartStudy</h1>' +
+          '<p class="card-body">Sign in with your Google account to access your adaptive lessons, weak-spot diagnosis, and spaced-recall queue.</p>' +
+          '<div class="btn-row" style="margin-top: 2rem;">' +
+            '<button class="btn btn-stamp" data-action="google-sign-in" style="width: 100%; display: flex; align-items: center; justify-content: center; gap: 12px; padding: 13px 20px;">' +
+              '<svg style="width: 20px; height: 20px;" viewBox="0 0 24 24">' +
+                '<path fill="#EA4335" d="M12 5c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 1.64 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/>' +
+                '<path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>' +
+                '<path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/>' +
+                '<path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>' +
+              '</svg>' +
+              '<span>Continue with Google</span>' +
+            '</button>' +
           "</div>" +
         "</div>" +
       "</div>"
@@ -727,15 +723,6 @@
   // Event wiring
   // --------------------------------------------------------------------
   function attachBehaviors() {
-    var userInput = document.getElementById("user-input");
-    if (userInput) {
-      userInput.addEventListener("input", function (e) { state.userInput = e.target.value; });
-      userInput.addEventListener("keydown", function (e) {
-        if (e.key === "Enter") { e.preventDefault(); signIn(state.userInput); }
-      });
-      userInput.focus();
-    }
-
     var topicInput = document.getElementById("topic-input");
     if (topicInput) topicInput.addEventListener("input", function (e) { state.topicInput = e.target.value; });
 
@@ -775,60 +762,100 @@
     var action = el.dataset.action;
 
     switch (action) {
+      // Google Firebase Authentication
+      case "google-sign-in":
+        if (window.FirebaseAuth && typeof window.FirebaseAuth.signIn === "function") {
+          setLoading("Signing in with Google\u2026");
+          window.FirebaseAuth.signIn()
+            .then(function (result) {
+              var user = result.user;
+              state.userId = user.uid;
+              state.displayName = user.displayName;
+              state.userPhoto = user.photoURL;
+              resetToEntry();
+              refreshBadgeOnLoad();
+            })
+            .catch(function (err) {
+              console.error("Google sign in error:", err);
+              showError(err.message, "gate");
+            });
+        } else {
+          showError("Authentication service is initializing. Please wait a moment and try again.", "gate");
+        }
+        break;
+
+      case "switch-user":
+        if (window.FirebaseAuth && typeof window.FirebaseAuth.signOut === "function") {
+          window.FirebaseAuth.signOut();
+        }
+        signOut();
+        break;
+
       case "entry-mode":
         state.entryMode = el.dataset.mode;
         render();
         break;
+
       case "trigger-file": {
         var input = document.getElementById("pdf-file-input");
         if (input) input.click();
         break;
       }
+
       case "start-topic": startTopicSession(); break;
       case "start-pdf": startPdfSession(); break;
       case "start-exam": generateExam(); break;
+
       case "select-mcq":
         state.answers[el.dataset.qid] = el.value;
         render();
         break;
+
       case "exam-prev":
         state.currentCard = Math.max(0, state.currentCard - 1);
         render();
         break;
+
       case "exam-next":
         state.currentCard = Math.min(state.questions.length - 1, state.currentCard + 1);
         render();
         break;
+
       case "exam-goto":
         state.currentCard = Number(el.dataset.index);
         render();
         break;
+
       case "exam-submit": submitExam(); break;
+
       case "toggle-feedback": {
         var idx = el.dataset.index;
         state.openFeedback[idx] = !state.openFeedback[idx];
         render();
         break;
       }
+
       case "go-reteach": generateReteach(); break;
       case "go-results": goto("results"); break;
+
       case "reveal-mini":
         state.revealedMini[el.dataset.index] = true;
         render();
         break;
+
       case "reveal-recall":
         state.recallRevealed[el.dataset.id] = true;
         render();
         break;
+
       case "review-recall":
         reviewRecall(el.dataset.id, Number(el.dataset.quality));
         break;
+
       case "go-recall": loadRecall(); break;
       case "go-entry": resetToEntry(); break;
 
-      // chrome / navigation
-      case "sign-in": signIn(state.userInput); break;
-      case "switch-user": signOut(); break;
+      // Chrome navigation
       case "nav-home": if (state.userId) resetToEntry(); break;
       case "nav-review": if (state.userId) loadRecall(); break;
       case "nav-history": if (state.userId) loadHistory(); break;
@@ -840,23 +867,42 @@
   document.addEventListener("keydown", function (e) {
     if (e.key !== "Enter" && e.key !== " ") return;
     var el = e.target.closest("[data-action]");
-    if (!el || el.tagName === "BUTTON" || el.tagName === "A" || el.tagName === "INPUT") return;
+    if (!el || el.tagName === "BUTTON" || el.tagName === "A" || el.tagName === "INPUT" || el.tagName === "TEXTAREA") return;
     e.preventDefault();
     el.click();
   });
 
   // --------------------------------------------------------------------
-  // Boot
+  // Boot & Firebase Auth State Listener
   // --------------------------------------------------------------------
-  (function boot() {
-    var saved = null;
-    try { saved = localStorage.getItem(USER_KEY); } catch (e) { /* private mode */ }
-    if (saved && /^[a-z0-9._-]{3,40}$/.test(saved)) {
-      state.userId = saved;
+  function startAppWithUser(user) {
+    if (user) {
+      state.userId = user.uid;
+      state.displayName = user.displayName;
+      state.userPhoto = user.photoURL;
       state.screen = "entry";
       render();
       refreshBadgeOnLoad();
     } else {
+      state.userId = null;
+      state.displayName = null;
+      state.userPhoto = null;
+      state.screen = "gate";
+      render();
+    }
+  }
+
+  (function boot() {
+    if (window.FirebaseAuth) {
+      window.FirebaseAuth.onAuthStateChanged(function (user) {
+        startAppWithUser(user);
+      });
+    } else {
+      window.addEventListener("firebase-ready", function () {
+        window.FirebaseAuth.onAuthStateChanged(function (user) {
+          startAppWithUser(user);
+        });
+      });
       state.screen = "gate";
       render();
     }
