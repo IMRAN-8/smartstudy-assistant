@@ -806,10 +806,23 @@
       case "start-pdf": startPdfSession(); break;
       case "start-exam": generateExam(); break;
 
-      case "select-mcq":
-        state.answers[el.dataset.qid] = el.value;
-        render();
-        break;
+     case "select-mcq":
+  state.answers[el.dataset.qid] = el.value;
+
+  // Smoothly update the selection classes without destroying the DOM or blinking
+  var optionList = el.closest(".option-list");
+  if (optionList) {
+    optionList.querySelectorAll(".option-label").forEach(function (lbl) {
+      lbl.classList.remove("is-checked");
+    });
+    var selectedLabel = optionList.querySelector('label[for="' + el.id + '"]');
+    if (selectedLabel) selectedLabel.classList.add("is-checked");
+  }
+
+  // Update the progress dot to show answered
+  var currentDot = APP.querySelector(".exam-dot.is-current");
+  if (currentDot) currentDot.classList.add("is-answered");
+  break;
 
       case "exam-prev":
         state.currentCard = Math.max(0, state.currentCard - 1);
