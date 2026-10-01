@@ -14,8 +14,7 @@
 </head>
 <body>
 
-  <!-- Ambient backdrop: drifting light + a faint technical grid. Purely
-       decorative, and switched off under prefers-reduced-motion. -->
+  <!-- Ambient backdrop: drifting light + technical grid -->
   <div class="backdrop" aria-hidden="true">
     <span class="aurora aurora-1"></span>
     <span class="aurora aurora-2"></span>
@@ -67,6 +66,65 @@
     </footer>
   </div>
 
+  <!-- Firebase Auth Initialization (Uses credentials dynamically loaded from server) -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+    import { 
+      getAuth, 
+      GoogleAuthProvider, 
+      signInWithPopup, 
+      signOut, 
+      onAuthStateChanged 
+    } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+
+    window.FirebaseAuth = {
+      isReady: false,
+      currentUser: null,
+      auth: null,
+      callbacks: [],
+      init: async function() {
+        try {
+          const res = await fetch("/api/config/firebase");
+          const config = await res.json();
+          if (!config.apiKey) {
+            console.error("Firebase config not found on server.");
+            return;
+          }
+          const app = initializeApp(config);
+          this.auth = getAuth(app);
+          const provider = new GoogleAuthProvider();
+          provider.setCustomParameters({ prompt: 'select_account' });
+
+          this.signIn = () => signInWithPopup(this.auth, provider);
+          this.signOut = () => signOut(this.auth);
+          this.getToken = async () => {
+            if (!this.auth || !this.auth.currentUser) return null;
+            return await this.auth.currentUser.getIdToken();
+          };
+
+          onAuthStateChanged(this.auth, (user) => {
+            this.currentUser = user;
+            this.callbacks.forEach(cb => cb(user));
+          });
+
+          this.isReady = true;
+          window.dispatchEvent(new CustomEvent("firebase-ready"));
+        } catch (err) {
+          console.error("Failed to initialize Firebase Auth:", err);
+        }
+      },
+      onAuthStateChanged: function(callback) {
+        this.callbacks.push(callback);
+        if (this.isReady && this.auth) {
+          callback(this.auth.currentUser);
+        }
+      }
+    };
+
+    window.FirebaseAuth.init();
+  </script>
+
+  <!-- Main App Script -->
   <script src="script.js"></script>
 </body>
 </html>
