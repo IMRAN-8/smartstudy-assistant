@@ -1,109 +1,69 @@
-# SmartStudy Assistant (SSA)
+# 🎓 SmartStudy Assistant (SSA)
 
-An AI-powered adaptive learning and self-assessment platform. Enter a topic or upload a PDF and the app will:
+> **An AI-powered adaptive learning and self-assessment platform built to replace passive cramming with active recall, automated blindspot diagnosis, and spaced repetition.**
 
-1. **Explain** the topic clearly.
-2. **Examine** you with auto-generated MCQ + short-answer questions.
-3. **Diagnose** your weak sub-concepts.
-4. **Re-teach** only the areas you got wrong.
-5. **Spaced recall** — reschedule those concepts (SM-2 algorithm) so you review them before you forget.
+---
 
-It is a single Node.js + Express app that serves both the web page and the API — deploy it exactly like a normal web service (e.g. Render).
+## 📌 Overview
 
-## Live Website: https://smartstudy-assistant.onrender.com/
+**SmartStudy Assistant** turns any topic or lecture PDF into an interactive five-stage cognitive mastery cycle. Rather than generating generic summaries, it isolates individual sub-concepts, diagnoses where the learner's understanding breaks down, and schedules targeted reviews using the scientifically proven **SM-2 Spaced Repetition Algorithm**.
 
-## Tech Stack
+---
 
-- Node.js + Express (one `server.js`)
-- Plain HTML + CSS + vanilla JavaScript frontend (`public/index.html`, no build step)
-- PostgreSQL / Supabase database
-- OpenRouter (OpenAI-compatible) LLM API
-- `pdf-parse` for PDF text extraction
+## 🔄 The 5-Stage Cognitive Learning Cycle
 
-## Project Structure
+1. **Structured Explanation**: Breaks down topics or uploaded PDFs into essential core principles, concrete worked examples, common misconceptions, and synthesis with zero fluff.
+2. **Diagnostic Assessment**: Generates custom 8-question exams (5 multiple-choice questions with plausible distractors + 3 conceptual short-answer questions).
+3. **Deep Diagnosis**: Short answers are evaluated semantically for true comprehension rather than keyword matching. Missed sub-concepts are tagged with high or medium severity.
+4. **Targeted Re-Teaching**: Rather than forcing students to re-read entire chapters, the system generates custom mini-lessons and quick checks addressing only the specific missed sub-concepts.
+5. **Spaced Recall (SM-2)**: Weak concepts are filed into an algorithmic review queue with dynamic intervals (1 day, 2 days, 4 days, 1 week, etc.) based on user confidence ratings.
+
+---
+
+## ✨ Key Features
+
+- **Google Authentication**: Secure, one-click sign-in using Firebase Auth and cryptographically verified server-side JWT tokens.
+- **Multi-Modal Input**: Study any free-text topic or upload lecture PDF slides and handouts.
+- **Study Pulse HUD**: Real-time home dashboard displaying active study streak, concepts mastered, and average exam accuracy.
+- **Instant Sparks**: One-click curated starter topics spanning biotechnology, computer science, physics, and world history.
+- **Smooth Exam UX**: Instant MCQ selection and question navigation without jarring page flickers or re-renders.
+- **Reliable LLM Fallback Routing**: Robust OpenRouter provider routing with exponential backoff and automatic model fallback.
+- **Creator Profile & Connect**: Built-in developer portfolio integration linking directly to developer socials.
+
+---
+
+## 🛠️ Tech Stack
+
+- **Frontend**: Vanilla JavaScript (ES6+), HTML5, Custom Glassmorphic CSS3
+- **Backend**: Node.js, Express.js
+- **Authentication**: Firebase Authentication & Firebase Admin SDK
+- **Database**: PostgreSQL on Supabase (Session Pooler)
+- **AI Engine**: OpenRouter API (Strict JSON Schema output with reasoning models)
+- **File Processing**: Multer & pdf-parse
+- **Hosting**: Render Cloud Platform
+
+---
+
+## 📁 Project Structure
 
 ```text
 smartstudy-assistant/
-├── public/
-│   └── index.html      Web UI (served by Express)
-├── server.js           Express server: UI + API + LLM + database
-├── schema.sql          Database tables (run in Supabase)
-├── package.json
-├── .env.example
-├── .gitignore
-├── LICENSE
-└── README.md
-```
+│
+├── public/                          # Client-side web application
+│   ├── index.html                   # Single-page application entry & Firebase Auth loader
+│   ├── script.js                    # State machine, API client, views, & UI interactions
+│   └── style.css                    # Dark-mode theme, HUD grid, and glassmorphic styling
+│
+├── server.js                        # Express API server, LLM prompts, SM-2 engine, & Postgres client
+├── schema.sql                       # PostgreSQL database schema (users, sessions, exams, recall)
+├── package.json                     # Node.js project manifest and dependency definitions
+├── package-lock.json                # Locked dependency tree
+└── README.md                        # Project documentation and architectural overview
+👨‍💻 Creator & Developer
+Imran Hosen
+Portfolio: imran-8.github.io
+GitHub: [@imran-8](https://github.com/IMRAN-8)
+Email: shahriarimran3315@gmail.com
+📄 License
+This project is licensed under the MIT License.
 
-## Setup
-
-### 1. Database (Supabase)
-
-1. Create a free project at https://supabase.com
-2. Open **SQL Editor** and run the contents of `schema.sql`.
-3. Go to **Project Settings → Database → Connection string → URI** and copy it
-   (use the **pooler** URI, port `6543`, for hosting).
-
-### 2. Configure environment
-
-```bash
-cp .env.example .env
-```
-
-Fill in `.env`:
-
-```env
-PORT=5000
-DATABASE_URL=your_supabase_connection_string
-OPENROUTER_API_KEY=your_openrouter_api_key
-LLM_MODEL=openai/gpt-4o-mini
-NODE_ENV=
-```
-
-Get an OpenRouter key at https://openrouter.ai/keys
-
-### 3. Run locally
-
-```bash
-npm install
-npm start
-```
-
-Open http://localhost:5000
-
-## Deploy on Render
-
-1. Push this folder to a GitHub repo.
-2. Render → **New → Web Service** → connect the repo.
-3. **Build command:** `npm install`
-4. **Start command:** `node server.js`
-5. Add environment variables: `DATABASE_URL`, `OPENROUTER_API_KEY`, `LLM_MODEL`, and `NODE_ENV=production`.
-6. Deploy. Render gives you a live URL.
-
-**Tip:** on Render's free tier the service sleeps when idle. Add the URL to
-[UptimeRobot](https://uptimerobot.com) to keep it awake (same trick used in Luna AI).
-
-## API Endpoints
-
-| Method | Path | Purpose |
-|---|---|---|
-| GET  | `/api/health` | Health check |
-| POST | `/api/session/topic` | Start a session from a topic |
-| POST | `/api/session/pdf` | Start a session from a PDF upload |
-| POST | `/api/explanation` | Generate the explanation |
-| POST | `/api/assessment` | Generate the exam |
-| POST | `/api/submit` | Grade answers, diagnose, schedule recall |
-| POST | `/api/reteach` | Generate targeted re-teaching |
-| GET  | `/api/recall/due` | List recall items that are due |
-| POST | `/api/recall/:id/review` | Review an item (SM-2 reschedule) |
-
-## What You Must Change
-
-- `.env` → real `DATABASE_URL` and `OPENROUTER_API_KEY`.
-- `schema.sql` → run it once in Supabase.
-- (Optional) `LLM_MODEL` → any model available on OpenRouter.
-- (Optional) prompts inside `server.js` (`PROMPTS` object) to change tone or question counts.
-
-## Author
-
-Imran Hosen — https://github.com/IMRAN-8
