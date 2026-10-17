@@ -67,10 +67,10 @@ smartstudy-assistant/
 └── README.md                        # Project documentation and architectural overview
 ```
 ## 👨‍💻 Creator & Developer
-Imran Hosen
-Portfolio: imran-8.github.io
-GitHub: [@imran-8](https://github.com/IMRAN-8)
-Email: shahriarimran3315@gmail.com
+- Imran Hosen
+- Portfolio: imran-8.github.io
+- GitHub: [@imran-8](https://github.com/IMRAN-8)
+- Email: shahriarimran3315@gmail.com
 
 ## 📄 License
 This project is licensed under the MIT License.
