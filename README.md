@@ -10,6 +10,12 @@
 
 ---
 
+## ▶️ Preview
+
+LIVE DEMO : https://smartstudy-assistant.onrender.com
+
+---
+
 ## 🔄 The 5-Stage Cognitive Learning Cycle
 
 1. **Structured Explanation**: Breaks down topics or uploaded PDFs into essential core principles, concrete worked examples, common misconceptions, and synthesis with zero fluff.
@@ -59,11 +65,13 @@ smartstudy-assistant/
 ├── package.json                     # Node.js project manifest and dependency definitions
 ├── package-lock.json                # Locked dependency tree
 └── README.md                        # Project documentation and architectural overview
-👨‍💻 Creator & Developer
+```
+##👨‍💻 Creator & Developer
 Imran Hosen
 Portfolio: imran-8.github.io
 GitHub: [@imran-8](https://github.com/IMRAN-8)
 Email: shahriarimran3315@gmail.com
-📄 License
+
+##📄 License
 This project is licensed under the MIT License.
 
