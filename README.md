@@ -12,7 +12,7 @@
 
 ## ▶️ Preview
 
-LIVE DEMO : https://smartstudy-assistant.onrender.com
+### LIVE DEMO : https://smartstudy-assistant.onrender.com
 
 ---
 
