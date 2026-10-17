@@ -66,12 +66,12 @@ smartstudy-assistant/
 ├── package-lock.json                # Locked dependency tree
 └── README.md                        # Project documentation and architectural overview
 ```
-##👨‍💻 Creator & Developer
+## 👨‍💻 Creator & Developer
 Imran Hosen
 Portfolio: imran-8.github.io
 GitHub: [@imran-8](https://github.com/IMRAN-8)
 Email: shahriarimran3315@gmail.com
 
-##📄 License
+## 📄 License
 This project is licensed under the MIT License.
 
