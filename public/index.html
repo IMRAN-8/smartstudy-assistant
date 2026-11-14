@@ -1,20 +1,119 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>SmartStudy — Academic Mastery & Diagnostic Recall Studio</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400..600;1,9..144,400..600&family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/style.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400..600;1,9..144,400..600&family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap"
+    rel="stylesheet"
+  />
+  <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <div id="app"></div>
+  <div class="shell">
+    <header class="topbar">
+      <div class="brand" data-action="nav-home" role="button" tabindex="0">
+        <div class="brand-mark" aria-hidden="true">S</div>
+        <div>
+          <div class="brand-name">SmartStudy</div>
+          <div class="brand-tag">diagnosed · re-taught · retained</div>
+        </div>
+      </div>
 
-  <!-- Firebase SDK (compat) for Google Sign-In -->
-  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
-  <script src="/script.js"></script>
+      <nav class="nav" id="main-nav" aria-label="Primary" hidden>
+        <button class="nav-tab is-active" data-action="nav-home" data-nav="home">
+          <span>Home</span>
+        </button>
+        <button class="nav-tab" data-action="nav-review" data-nav="recall">
+          <span>Review</span>
+          <span class="badge tabular-nums" id="due-badge" hidden>0</span>
+        </button>
+        <button class="nav-tab" data-action="nav-history" data-nav="history">
+          <span>History</span>
+        </button>
+        <button class="nav-tab" data-action="nav-about" data-nav="about">
+          <span>About &amp; System</span>
+        </button>
+      </nav>
+
+      <div class="user-area" id="user-area"></div>
+    </header>
+
+    <main id="app" aria-live="polite"></main>
+
+    <footer class="footer">
+      <span>SmartStudy Assistant</span>
+      <span class="dot" aria-hidden="true">·</span>
+      <span>explain → examine → diagnose → re-teach → recall</span>
+    </footer>
+  </div>
+
+  <!-- Firebase Auth Initialization (Loads credentials dynamically from /api/config/firebase) -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+    import {
+      getAuth,
+      GoogleAuthProvider,
+      signInWithPopup,
+      signOut,
+      onAuthStateChanged
+    } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+
+    window.FirebaseAuth = {
+      isReady: false,
+      currentUser: null,
+      auth: null,
+      callbacks: [],
+      init: async function () {
+        try {
+          const res = await fetch("/api/config/firebase");
+          if (!res.ok) {
+            console.error("Failed to fetch /api/config/firebase — ensure server.js from branch IMRAN-8-p2_v8.08 is deployed.");
+            return;
+          }
+          const config = await res.json();
+          if (!config.apiKey) {
+            console.error("Firebase config not found on server. Check FIREBASE_API_KEY in Render Environment.");
+            return;
+          }
+          const app = initializeApp(config);
+          this.auth = getAuth(app);
+          const provider = new GoogleAuthProvider();
+          provider.setCustomParameters({ prompt: "select_account" });
+
+          this.signIn = () => signInWithPopup(this.auth, provider);
+          this.signOut = () => signOut(this.auth);
+          this.getToken = async () => {
+            if (!this.auth || !this.auth.currentUser) return null;
+            return await this.auth.currentUser.getIdToken();
+          };
+
+          onAuthStateChanged(this.auth, (user) => {
+            this.currentUser = user;
+            this.callbacks.forEach((cb) => cb(user));
+          });
+
+          this.isReady = true;
+          window.dispatchEvent(new CustomEvent("firebase-ready"));
+        } catch (err) {
+          console.error("Failed to initialize Firebase Auth:", err);
+        }
+      },
+      onAuthStateChanged: function (callback) {
+        this.callbacks.push(callback);
+        if (this.isReady && this.auth) {
+          callback(this.auth.currentUser);
+        }
+      }
+    };
+
+    window.FirebaseAuth.init();
+  </script>
+
+  <!-- Main App Script -->
+  <script src="script.js"></script>
 </body>
 </html>
