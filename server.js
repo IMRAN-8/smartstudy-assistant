@@ -4,9 +4,8 @@
  *   - serves the web UI (public/index.html)
  *   - exposes the API (explain / exam / grade / diagnose / re-teach / spaced recall)
  *   - talks to an LLM through OpenRouter
+ *   - authenticates students securely via Firebase Google Sign-In
  *   - stores everything in Supabase / PostgreSQL
- *
- * Everything lives in this one file to keep the project simple.
  */
 
 require("dotenv").config();
@@ -18,6 +17,7 @@ const fs = require("fs");
 const path = require("path");
 const { Pool } = require("pg");
 const OpenAI = require("openai");
+const admin = require("firebase-admin");
 
 // ---------------------------------------------------------------------------
 // Setup
@@ -33,8 +33,36 @@ const upload = multer({ dest: "uploads/", limits: { fileSize: 8 * 1024 * 1024 } 
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: process.env.NODE_ENV === "production" ? { rejectUnauthorized: false } : false,
+  ssl: process.env.DATABASE_URL && !process.env.DATABASE_URL.includes("localhost")
+    ? { rejectUnauthorized: false }
+    : false,
 });
+
+// ---------------------------------------------------------------------------
+// Firebase Admin Initialization (Render Secret File or Local File)
+// ---------------------------------------------------------------------------
+try {
+  const secretPath = fs.existsSync("/etc/secrets/serviceAccountKey.json")
+    ? "/etc/secrets/serviceAccountKey.json"
+    : path.join(__dirname, "serviceAccountKey.json");
+
+  if (fs.existsSync(secretPath)) {
+    const serviceAccount = require(secretPath);
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount),
+    });
+    console.log("Firebase Admin initialized successfully from", secretPath);
+  } else if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+    admin.initializeApp({
+      credential: admin.credential.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)),
+    });
+    console.log("Firebase Admin initialized from FIREBASE_SERVICE_ACCOUNT env var.");
+  } else {
+    console.warn("Warning: serviceAccountKey.json not found. Token verification will fail until configured.");
+  }
+} catch (err) {
+  console.error("Firebase Admin initialization error:", err.message);
+}
 
 // ---------------------------------------------------------------------------
 // LLM helper (OpenRouter, OpenAI-compatible)
@@ -47,9 +75,6 @@ function llmClient() {
   });
 }
 
-// With strict JSON schemas the provider constrains decoding, so the response
-// is already a bare JSON object. This is just a seatbelt for the rare case a
-// fallback provider wraps it in markdown fences.
 function parseJson(raw) {
   const text = String(raw || "").trim();
   try {
@@ -66,45 +91,23 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// Used if the primary model (LLM_MODEL) keeps failing with a transient
-// error through all its retries — a smaller sibling that speaks the exact
-// same prompts and schemas, so the request still succeeds instead of dying.
 const FALLBACK_MODEL = process.env.FALLBACK_MODEL || "openai/gpt-oss-20b";
 const DEFAULT_MODEL = process.env.LLM_MODEL || "openai/gpt-oss-120b";
 
-// Provider routing. The SAME model runs at wildly different speeds depending
-// on who hosts it — for gpt-oss-120b it ranges from 23 tps to 448 tps, so
-// leaving this to price-based default routing can make a 2s call take 30s.
-//
-// Every provider listed here was checked to support response_format +
-// structured_outputs. Amazon Bedrock and SambaNova are fast but do NOT, so
-// they are deliberately excluded — routing there would silently break JSON
-// mode. require_parameters is the belt-and-braces version of that check: it
-// tells OpenRouter to skip any provider that can't honour the parameters we
-// send, rather than quietly ignoring them.
 const PROVIDER_ROUTING = {
   order: ["Groq", "Cerebras", "DeepInfra"],
   allow_fallbacks: true,
   require_parameters: true,
 };
 
-// gpt-oss models expose a reasoning budget. Schema-shaped generation needs
-// almost none of it, so "low" keeps latency and token spend down. Grading a
-// free-text answer is the one place judgement actually matters.
 const EFFORT = { generate: "low", grade: "medium" };
 
-// Only reasoning-capable models accept a reasoning budget. Sending one to a
-// model that doesn't (e.g. Granite) combined with require_parameters would
-// leave ZERO eligible providers and fail the request — so gate it on the
-// model. Set REASONING_EFFORT=off to disable entirely.
 const REASONING_MODELS = /gpt-oss|gpt-5|o[34]-|gemini-2\.5|qwen3-.*thinking|deepseek-r/i;
 function reasoningFor(model, effort) {
   if (process.env.REASONING_EFFORT === "off") return undefined;
   return REASONING_MODELS.test(model) ? { effort } : undefined;
 }
 
-
-// Pull the human-readable reason out of an OpenRouter/OpenAI SDK error.
 function describeApiError(err) {
   return (
     err?.error?.message ||
@@ -114,8 +117,6 @@ function describeApiError(err) {
   );
 }
 
-// Turn an upstream status into a message that says what to actually fix.
-// These are the four ways this app dies in production, in order of likelihood.
 function explainLlmFailure(status, detail, model) {
   if (status === 401)
     return "The AI provider rejected the API key (401). Check OPENROUTER_API_KEY in your Render environment — it is missing, expired, or was revoked.";
@@ -130,9 +131,6 @@ function explainLlmFailure(status, detail, model) {
   return `The AI provider call failed${status ? ` (${status})` : ""}: ${detail}`;
 }
 
-// Strict output schemas. These are what let us stop *asking* for JSON and
-// start *guaranteeing* it — the provider constrains token selection to the
-// shape below, so malformed or reshaped output is no longer a failure mode.
 const SCHEMAS = {
   explanation: {
     type: "object",
@@ -156,8 +154,6 @@ const SCHEMAS = {
           properties: {
             type: { type: "string", enum: ["mcq", "short"] },
             question: { type: "string" },
-            // Always an array — empty for short-answer. A nullable union here
-            // would be rejected by some providers' schema engines.
             options: { type: "array", items: { type: "string" } },
             correctAnswer: { type: "string" },
             conceptTag: { type: "string" },
@@ -195,11 +191,6 @@ const SCHEMAS = {
   },
 };
 
-/**
- * Call the LLM and get back a parsed object matching `schema`.
- *
- * opts: { schema, schemaName, maxTokens, effort, model, attempt }
- */
 async function generateJson(system, user, opts = {}) {
   const {
     schema,
@@ -217,11 +208,7 @@ async function generateJson(system, user, opts = {}) {
       model,
       temperature: 0.2,
       max_tokens: maxTokens,
-      // Pin to fast, schema-capable providers instead of taking whatever
-      // price-sorted routing hands us.
       provider: PROVIDER_ROUTING,
-      // Keep the reasoning budget small for shape-constrained generation.
-      // Omitted entirely for models that don't support it.
       ...(reasoningFor(model, effort) ? { reasoning: reasoningFor(model, effort) } : {}),
       response_format: schema
         ? { type: "json_schema", json_schema: { name: schemaName, strict: true, schema } }
@@ -232,30 +219,20 @@ async function generateJson(system, user, opts = {}) {
       ],
     });
   } catch (apiErr) {
-    // Transient upstream issues (rate limits, provider hiccups, timeouts) —
-    // worth a short backoff and retry rather than failing the whole request.
     const status = apiErr?.status || apiErr?.response?.status;
     const isTransient = status === 429 || status === 500 || status === 502 || status === 503 || status === 529;
-    // A model that OpenRouter rejects outright (unknown slug, deprecated
-    // ":free" variant, not enabled for this account) fails instantly with
-    // 400/404. Retrying the same model is pointless, but the fallback model
-    // is a different slug and usually works — so fall back on these too.
     const isBadModel = status === 400 || status === 404;
 
     if (isTransient && attempt < 4) {
-      await sleep(500 * Math.pow(2, attempt - 1)); // 0.5s, 1s, 2s
+      await sleep(500 * Math.pow(2, attempt - 1));
       return generateJson(system, user, { ...opts, attempt: attempt + 1 });
     }
-    // Retries exhausted (or the model itself is unusable). If we weren't
-    // already on the fallback, try it once before giving up entirely.
     if ((isTransient || isBadModel) && model !== FALLBACK_MODEL) {
       console.warn(
         `generateJson: model "${model}" failed (status ${status}: ${describeApiError(apiErr)}) — falling back to ${FALLBACK_MODEL}`
       );
       return generateJson(system, user, { ...opts, model: FALLBACK_MODEL, attempt: 1 });
     }
-    // Nothing left to try. Re-throw with the upstream reason attached so the
-    // route can log it AND report something actionable to the client.
     apiErr.llmStatus = status;
     apiErr.llmModel = model;
     apiErr.llmDetail = describeApiError(apiErr);
@@ -266,9 +243,6 @@ async function generateJson(system, user, opts = {}) {
   const choice = response.choices?.[0];
   const raw = choice?.message?.content || "";
 
-  // The schema guarantees shape, but it cannot guarantee the response had
-  // room to finish. A hard token cut-off is the one remaining way to get
-  // unparseable output, so retry that case once with more headroom.
   if (choice?.finish_reason === "length" && attempt === 1) {
     console.warn(`generateJson: response hit the ${maxTokens}-token ceiling, retrying with more room`);
     return generateJson(system, user, {
@@ -289,9 +263,6 @@ async function generateJson(system, user, opts = {}) {
 // Prompts
 // ---------------------------------------------------------------------------
 const PROMPTS = {
-  // Note: output shape is enforced by SCHEMAS, not by these prompts. They only
-  // carry teaching intent — what makes the content *good*, not what makes it
-  // parseable.
   explanation:
     "You are SmartStudy Assistant, an expert teacher writing a concise study guide. Explain the " +
     "given topic or study material clearly enough that a student could learn the essentials with " +
@@ -326,7 +297,6 @@ const PROMPTS = {
     "check for understanding. No filler, no restating the question.",
 };
 
-// The schema guarantees the keys exist; this only checks they carry content.
 function isValidExplanation(e) {
   return (
     !!e &&
@@ -337,11 +307,7 @@ function isValidExplanation(e) {
   );
 }
 
-// Generate an explanation. Shape is now enforced by the JSON schema, so the
-// only thing left to guard against is a technically-valid-but-empty response.
 async function generateExplanationWithRetry(input) {
-  // Remember why an attempt failed — swallowing this is what previously hid
-  // the actual cause (bad key / no credits / bad model) from logs and UI.
   let lastError = null;
 
   async function attempt() {
@@ -364,12 +330,11 @@ async function generateExplanationWithRetry(input) {
     explanation = await attempt();
   }
   if (!isValidExplanation(explanation)) {
-    if (lastError) throw lastError; // real upstream reason beats a generic message
+    if (lastError) throw lastError;
     throw new Error("The AI returned an empty explanation twice in a row. Try again, or switch LLM_MODEL to a stronger model.");
   }
   return explanation;
 }
-
 
 // ---------------------------------------------------------------------------
 // Diagnosis + spaced-recall (SM-2) logic
@@ -393,14 +358,12 @@ function diagnoseWeakConcepts(graded) {
   return Array.from(weak.values());
 }
 
-// First review interval based on how badly the concept was missed.
 function firstDueDate(severity) {
   const due = new Date();
   due.setDate(due.getDate() + (severity === "high" ? 1 : severity === "medium" ? 2 : 4));
   return due;
 }
 
-// SM-2 update. quality: 2=Again, 3=Hard, 4=Good, 5=Easy.
 function sm2(prev, quality) {
   let { ease, interval_days: interval, repetitions } = prev;
   ease = Number(ease) || 2.5;
@@ -424,9 +387,6 @@ function sm2(prev, quality) {
   return { ease: Number(ease.toFixed(2)), interval_days: interval, repetitions, due_at: due };
 }
 
-
-// Send a failure response that keeps the actionable reason instead of
-// flattening every problem into one generic string.
 function sendFailure(res, err, fallbackMessage) {
   if (isSchemaError(err)) return sendDbFailure(res, err, fallbackMessage);
   const message = err?.userMessage || fallbackMessage;
@@ -434,21 +394,13 @@ function sendFailure(res, err, fallbackMessage) {
   if (err?.llmStatus) body.upstreamStatus = err.llmStatus;
   if (err?.llmModel) body.model = err.llmModel;
   if (err?.llmDetail) body.detail = err.llmDetail;
-  // 502: this server is fine, the upstream AI provider is what failed.
   return res.status(err?.llmStatus ? 502 : 500).json(body);
 }
 
 // ---------------------------------------------------------------------------
-// Routes
+// Schema drift error handling
 // ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// Schema drift
-// ---------------------------------------------------------------------------
-// Deploying code before running the matching schema.sql is the single easiest
-// way to break this app, and Postgres reports it with a precise error code.
-// Surface that as an instruction instead of a generic 500.
-const SCHEMA_ERROR_CODES = new Set(["42P01", "42703"]); // undefined_table, undefined_column
+const SCHEMA_ERROR_CODES = new Set(["42P01", "42703"]);
 const SCHEMA_HINT =
   "The database is missing tables or columns this version needs. Run the latest schema.sql " +
   "in Supabase -> SQL Editor, then try again. Visit /api/diag/db to see exactly what is missing.";
@@ -457,8 +409,6 @@ function isSchemaError(err) {
   return !!err && SCHEMA_ERROR_CODES.has(err.code);
 }
 
-// Every database catch block goes through here so a migration problem always
-// reports itself the same way, wherever it surfaces first.
 function sendDbFailure(res, err, fallbackMessage) {
   if (isSchemaError(err)) {
     return res.status(503).json({ error: SCHEMA_HINT, detail: `${err.code}: ${err.message}` });
@@ -467,18 +417,9 @@ function sendDbFailure(res, err, fallbackMessage) {
 }
 
 // ---------------------------------------------------------------------------
-// Users + ownership
+// Users + Google Firebase Authentication
 // ---------------------------------------------------------------------------
-// IMPORTANT: this is identity, NOT authentication. A person types a user ID
-// and owns whatever is filed under it. There is no password, so this
-// SEPARATES users' data — it does not PROTECT it. Anyone who knows an ID can
-// use it. Add real auth before this holds anything sensitive.
-const USER_ID_RE = /^[a-z0-9._-]{3,40}$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-function normalizeUserId(raw) {
-  return String(raw || "").trim().toLowerCase();
-}
 
 async function ensureUser(userId, displayName) {
   await pool.query(
@@ -489,32 +430,32 @@ async function ensureUser(userId, displayName) {
   );
 }
 
-// Every data route sits behind this: no user id, no data.
+// Every protected data route sits behind this: verified Google token required
 async function requireUser(req, res, next) {
-  const userId = normalizeUserId(req.header("x-user-id"));
-  if (!userId) {
-    return res.status(401).json({ error: "No user ID sent. Sign in with a user ID first." });
+  const authHeader = req.header("authorization") || "";
+  const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
+
+  if (!token) {
+    return res.status(401).json({ error: "No authentication token sent. Please sign in with Google." });
   }
-  if (!USER_ID_RE.test(userId)) {
-    return res.status(400).json({
-      error: "Invalid user ID. Use 3-40 characters: letters, numbers, dot, dash or underscore.",
-    });
-  }
+
   try {
-    await ensureUser(userId);
+    const decodedToken = await admin.auth().verifyIdToken(token);
+    const userId = decodedToken.uid;
+    const displayName = decodedToken.name || (decodedToken.email ? decodedToken.email.split("@")[0] : "Student");
+
+    await ensureUser(userId, displayName);
     req.userId = userId;
+    req.userEmail = decodedToken.email;
     next();
   } catch (err) {
-    console.error("requireUser", err);
-    return sendDbFailure(res, err, "Could not verify the user.");
+    console.error("Auth token verification failed:", err.message);
+    return res.status(401).json({ error: "Invalid or expired session. Please sign in again." });
   }
 }
 
-// Look a session up *scoped to its owner*. Returns null when the session does
-// not exist OR belongs to somebody else — the caller cannot tell the two
-// apart, which is exactly what we want.
 async function getOwnedSession(sessionId, userId) {
-  if (!UUID_RE.test(String(sessionId || ""))) return null; // avoid a pg cast error on junk input
+  if (!UUID_RE.test(String(sessionId || ""))) return null;
   const r = await pool.query("SELECT * FROM study_sessions WHERE id=$1 AND user_id=$2", [
     sessionId,
     userId,
@@ -527,11 +468,6 @@ const NOT_YOURS = { error: "That study session was not found in your account." }
 // ---------------------------------------------------------------------------
 // Exam validation
 // ---------------------------------------------------------------------------
-// The JSON schema guarantees the SHAPE of a generated exam, but it cannot
-// guarantee it makes sense. The dangerous case is an MCQ whose correctAnswer
-// is not one of its own options: the student can never match it, is marked
-// wrong, and a bogus "weak concept" gets filed. Repair what we can, drop what
-// we cannot, and never persist a broken question.
 function validateQuestions(rawQuestions) {
   const kept = [];
   const dropped = [];
@@ -557,8 +493,6 @@ function validateQuestions(rawQuestions) {
       continue;
     }
 
-    // Accept a case/whitespace mismatch by snapping to the real option text,
-    // since that is a formatting slip rather than a wrong answer.
     const match = options.find((o) => o.toLowerCase() === correct.toLowerCase());
     if (!match) {
       dropped.push({ question, reason: "correctAnswer is not one of the options" });
@@ -571,12 +505,26 @@ function validateQuestions(rawQuestions) {
   return { kept, dropped };
 }
 
+// ---------------------------------------------------------------------------
+// Routes
+// ---------------------------------------------------------------------------
+
+// Serves Firebase public config from Render environment variables to the frontend
+app.get("/api/config/firebase", (_req, res) => {
+  res.json({
+    apiKey: process.env.FIREBASE_API_KEY || "",
+    authDomain: process.env.FIREBASE_AUTH_DOMAIN || "",
+    projectId: process.env.FIREBASE_PROJECT_ID || "",
+    storageBucket: process.env.FIREBASE_STORAGE_BUCKET || "",
+    messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID || "",
+    appId: process.env.FIREBASE_APP_ID || "",
+  });
+});
+
 // Health check
 app.get("/api/health", (_req, res) => res.json({ ok: true, service: "SmartStudy Assistant" }));
 
-// Diagnostic: proves in one request whether the AI provider is reachable and
-// configured, and reports the provider's own error text if it is not.
-// Never returns the key itself — only whether one is present.
+// Diagnostics
 app.get("/api/diag/llm", async (_req, res) => {
   const model = DEFAULT_MODEL;
   const keyPresent = Boolean(process.env.OPENROUTER_API_KEY);
@@ -585,7 +533,7 @@ app.get("/api/diag/llm", async (_req, res) => {
       ok: false,
       keyPresent: false,
       model,
-      error: "OPENROUTER_API_KEY is not set in this environment. Add it in Render -> Environment and redeploy.",
+      error: "OPENROUTER_API_KEY is not set in this environment.",
     });
   }
   try {
@@ -604,8 +552,6 @@ app.get("/api/diag/llm", async (_req, res) => {
       keyPresent: true,
       model,
       modelUsed: r.model || model,
-      // Which host actually served this — the whole point of pinning. If this
-      // is not one of the providers below, routing is not being honoured.
       servedBy: r.provider || "unknown",
       routing: PROVIDER_ROUTING,
       fallbackModel: FALLBACK_MODEL,
@@ -624,8 +570,6 @@ app.get("/api/diag/llm", async (_req, res) => {
   }
 });
 
-// Diagnostic: says precisely which tables/columns this build needs and the
-// database does not have. Pairs with /api/diag/llm.
 app.get("/api/diag/db", async (_req, res) => {
   const REQUIRED = {
     users: ["id", "display_name", "created_at"],
@@ -667,26 +611,18 @@ app.get("/api/diag/db", async (_req, res) => {
   }
 });
 
-// Sign in: there is no password — supplying an ID claims it. Creates the
-// account on first use.
-app.post("/api/user", async (req, res) => {
-  const userId = normalizeUserId(req.body.userId);
-  if (!USER_ID_RE.test(userId)) {
-    return res.status(400).json({
-      error: "Pick a user ID of 3-40 characters: letters, numbers, dot, dash or underscore.",
-    });
-  }
+// Profile / Current User
+app.get("/api/user", requireUser, async (req, res) => {
   try {
-    await ensureUser(userId, req.body.displayName);
-    const r = await pool.query("SELECT id, display_name, created_at FROM users WHERE id=$1", [userId]);
+    const r = await pool.query("SELECT id, display_name, created_at FROM users WHERE id=$1", [req.userId]);
     res.json({ user: r.rows[0] });
   } catch (err) {
     console.error("user", err);
-    return sendDbFailure(res, err, "Could not sign in.");
+    return sendDbFailure(res, err, "Could not load user profile.");
   }
 });
 
-// The signed-in user's study history, newest first.
+// Study history
 app.get("/api/sessions", requireUser, async (req, res) => {
   try {
     const r = await pool.query(
@@ -707,7 +643,7 @@ app.get("/api/sessions", requireUser, async (req, res) => {
   }
 });
 
-// Start a session from a typed topic
+// Start session: topic
 app.post("/api/session/topic", requireUser, async (req, res) => {
   try {
     const topic = String(req.body.topic || "").trim();
@@ -723,11 +659,11 @@ app.post("/api/session/topic", requireUser, async (req, res) => {
   }
 });
 
-// Start a session from an uploaded PDF
+// Start session: PDF
 app.post("/api/session/pdf", requireUser, upload.single("pdf"), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: "PDF file is required" });
-    const pdfParse = require("pdf-parse"); // required lazily to avoid a known load-time bug
+    const pdfParse = require("pdf-parse");
     const buffer = fs.readFileSync(req.file.path);
     const data = await pdfParse(buffer);
     const text = String(data.text || "").replace(/\s+/g, " ").trim();
@@ -746,13 +682,12 @@ app.post("/api/session/pdf", requireUser, upload.single("pdf"), async (req, res)
   }
 });
 
-// Generate (or return cached) explanation
+// Explanation
 app.post("/api/explanation", requireUser, async (req, res) => {
   try {
     const { sessionId } = req.body;
     if (!sessionId) return res.status(400).json({ error: "sessionId is required" });
 
-    // Ownership first — never serve a cached explanation for someone else's session.
     const session = await getOwnedSession(sessionId, req.userId);
     if (!session) return res.status(404).json(NOT_YOURS);
 
@@ -776,7 +711,7 @@ app.post("/api/explanation", requireUser, async (req, res) => {
   }
 });
 
-// Generate an exam for a session
+// Assessment
 app.post("/api/assessment", requireUser, async (req, res) => {
   try {
     const { sessionId } = req.body;
@@ -803,13 +738,10 @@ app.post("/api/assessment", requireUser, async (req, res) => {
         maxTokens: 4096,
       });
     } catch (genErr) {
-      // Don't leave a question-less assessment row behind if generation
-      // never succeeded.
       await scrap();
       throw genErr;
     }
 
-    // Never persist a question the student cannot possibly answer correctly.
     const { kept, dropped } = validateQuestions(generated.questions);
     if (dropped.length) {
       console.warn(
@@ -825,9 +757,6 @@ app.post("/api/assessment", requireUser, async (req, res) => {
       });
     }
 
-    // position keeps the exam in a deterministic order. created_at ties are
-    // possible when rows are inserted in a tight loop, which used to let the
-    // question order shuffle between reads.
     for (let i = 0; i < kept.length; i++) {
       const q = kept[i];
       await pool.query(
@@ -857,7 +786,6 @@ app.post("/api/assessment", requireUser, async (req, res) => {
   }
 });
 
-
 // Submit answers -> grade, diagnose weak concepts, schedule spaced recall
 app.post("/api/submit", requireUser, async (req, res) => {
   try {
@@ -865,8 +793,6 @@ app.post("/api/submit", requireUser, async (req, res) => {
     if (!assessmentId) return res.status(400).json({ error: "assessmentId is required" });
     if (!UUID_RE.test(String(assessmentId))) return res.status(404).json({ error: "Exam not found" });
 
-    // Joining through to study_sessions.user_id is what stops one user from
-    // grading (and polluting the recall queue of) another user's exam.
     const qRows = await pool.query(
       `SELECT q.*, a.session_id FROM questions q
          JOIN assessments a ON a.id = q.assessment_id
@@ -878,41 +804,41 @@ app.post("/api/submit", requireUser, async (req, res) => {
     if (!qRows.rowCount) return res.status(404).json({ error: "Exam not found in your account" });
 
     const answerMap = new Map(answers.map((x) => [x.questionId, String(x.answer || "").trim()]));
-    const graded = [];
 
-    for (const q of qRows.rows) {
-      const studentAnswer = answerMap.get(q.id) || "";
-      let result;
-      if (q.question_type === "mcq") {
-        const correct = studentAnswer.toLowerCase() === String(q.correct_answer).trim().toLowerCase();
-        result = {
-          score: correct ? 1 : 0,
-          isCorrect: correct,
-          feedback: correct ? "Correct." : `Correct answer: ${q.correct_answer}`,
+    // Parallelize grading for fast responses
+    const graded = await Promise.all(
+      qRows.rows.map(async (q) => {
+        const studentAnswer = answerMap.get(q.id) || "";
+        let result;
+        if (q.question_type === "mcq") {
+          const correct = studentAnswer.toLowerCase() === String(q.correct_answer).trim().toLowerCase();
+          result = {
+            score: correct ? 1 : 0,
+            isCorrect: correct,
+            feedback: correct ? "Correct." : `Correct answer: ${q.correct_answer}`,
+          };
+        } else {
+          result = await generateJson(
+            PROMPTS.grading,
+            { question: q.question_text, correctAnswer: q.correct_answer, studentAnswer },
+            {
+              schema: SCHEMAS.grading,
+              schemaName: "grading",
+              effort: EFFORT.grade,
+              maxTokens: 800,
+            }
+          );
+        }
+        return {
+          questionId: q.id,
+          question: q.question_text,
+          conceptTag: q.concept_tag,
+          correctAnswer: q.correct_answer,
+          studentAnswer,
+          ...result,
         };
-      } else {
-        result = await generateJson(
-          PROMPTS.grading,
-          { question: q.question_text, correctAnswer: q.correct_answer, studentAnswer },
-          {
-            schema: SCHEMAS.grading,
-            schemaName: "grading",
-            // Judging a free-text answer is the one call where thinking pays
-            // for itself — and at ~40 output tokens it costs almost nothing.
-            effort: EFFORT.grade,
-            maxTokens: 800,
-          }
-        );
-      }
-      graded.push({
-        questionId: q.id,
-        question: q.question_text,
-        conceptTag: q.concept_tag,
-        correctAnswer: q.correct_answer,
-        studentAnswer,
-        ...result,
-      });
-    }
+      })
+    );
 
     const sessionId = qRows.rows[0].session_id;
     const score = graded.length
@@ -930,7 +856,6 @@ app.post("/api/submit", requireUser, async (req, res) => {
       );
     }
 
-    // Diagnose + schedule spaced recall
     const weak = diagnoseWeakConcepts(graded);
     for (const w of weak) {
       const savedWeak = await pool.query(
@@ -955,7 +880,7 @@ app.post("/api/submit", requireUser, async (req, res) => {
   }
 });
 
-// Generate targeted re-teaching for a session's weak concepts
+// Re-teach lessons
 app.post("/api/reteach", requireUser, async (req, res) => {
   try {
     const { sessionId } = req.body;
@@ -969,10 +894,6 @@ app.post("/api/reteach", requireUser, async (req, res) => {
       [sessionId]
     );
 
-    // Each concept's re-teach lesson is independent of the others, so
-    // generate them all concurrently instead of one-at-a-time — with N
-    // weak concepts this cuts wall-clock time roughly by a factor of N
-    // instead of paying for each LLM round-trip back to back.
     const lessons = await Promise.all(
       weak.rows.map(async (c) => {
         const existing = await pool.query(
@@ -1001,7 +922,7 @@ app.post("/api/reteach", requireUser, async (req, res) => {
   }
 });
 
-// Spaced-recall items that are due now (with their re-teach mini question for re-testing)
+// Spaced-recall due items
 app.get("/api/recall/due", requireUser, async (req, res) => {
   try {
     const due = await pool.query(
@@ -1021,7 +942,7 @@ app.get("/api/recall/due", requireUser, async (req, res) => {
   }
 });
 
-// Review a recall item -> reschedule with SM-2. body: { quality: 2|3|4|5 }
+// Review recall item
 app.post("/api/recall/:id/review", requireUser, async (req, res) => {
   try {
     const quality = Number(req.body.quality);
@@ -1050,7 +971,7 @@ app.post("/api/recall/:id/review", requireUser, async (req, res) => {
   }
 });
 
-// Fallback: serve the single-page UI for any non-API route
+// Fallback: serve UI
 app.get(/^\/(?!api).*/, (_req, res) => {
   res.sendFile(path.join(__dirname, "public", "index.html"));
 });
